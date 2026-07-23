@@ -6,14 +6,19 @@ import type { RuntimeConfig } from "../../src/lib/types";
 
 const config: RuntimeConfig = {
   appName: "CardScope",
+  recognition: {
+    enabled: true,
+    processing: "server",
+    maxImageBytes: 2 * 1024 * 1024,
+  },
   auth: {
     enabled: true,
     issuer: "https://auth.example.test",
     clientId: "cardscope",
     scope: "openid",
   },
-  vision: { enabled: false },
   sync: { enabled: true, retentionDays: 1826 },
+  valuation: { marketQuotesEnabled: true },
 };
 
 function renderSettings(overrides: Record<string, unknown> = {}) {

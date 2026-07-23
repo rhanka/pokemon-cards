@@ -8,6 +8,7 @@ import {
   makeId,
   normalizeHoldingQuantity,
   replayCollection,
+  snapshotPriceQuote,
   type AddHoldingInput,
 } from "./collection";
 import { normalizeCurrency } from "./money";
@@ -224,13 +225,21 @@ export class CollectionRepository {
       quote?: PriceQuote | null;
     },
   ): Promise<void> {
+    const normalizedPatch =
+      patch.quote === undefined
+        ? patch
+        : {
+            ...patch,
+            quote:
+              patch.quote === null ? null : snapshotPriceQuote(patch.quote),
+          };
     await this.append({
       id: makeId("event"),
       type: "holding.updated",
       holdingId,
       deviceId: this.deviceId,
       occurredAt: new Date().toISOString(),
-      payload: patch,
+      payload: normalizedPatch,
     });
   }
 

@@ -129,7 +129,7 @@ export function decideRecognition(
   const margin = best.score - (candidates[1]?.score ?? 0);
   const strongIndependentSignals = best.matchReasons.length >= 2;
   const status =
-    best.score >= 0.76 && (margin >= 0.08 || strongIndependentSignals)
+    best.score >= 0.76 && margin >= 0.08 && strongIndependentSignals
       ? "confident"
       : best.score >= 0.42
         ? "review"

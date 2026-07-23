@@ -6,8 +6,16 @@ export interface CatalogueGuardOptions {
 }
 
 export type CatalogueGuardLease =
-  | { allowed: false; retryAfterSeconds: number }
-  | { allowed: true; release: () => void };
+  | {
+      allowed: false;
+      reason: "concurrency" | "rate";
+      retryAfterSeconds: number;
+    }
+  | {
+      allowed: true;
+      release: () => void;
+      refundClientQuota: () => void;
+    };
 
 interface WindowCounter {
   windowStartedAt: number;
@@ -50,7 +58,11 @@ export class CatalogueRequestGuard {
   enter(clientId: string): CatalogueGuardLease {
     const now = this.clock();
     if (this.active >= this.options.maxConcurrent) {
-      return { allowed: false, retryAfterSeconds: 1 };
+      return {
+        allowed: false,
+        reason: "concurrency",
+        retryAfterSeconds: 1,
+      };
     }
 
     this.global = this.currentWindow(this.global, now);
@@ -67,7 +79,7 @@ export class CatalogueRequestGuard {
     ) {
       client.lastSeenAt = now;
       this.rememberClient(normalizedClient, client, now);
-      return { allowed: false, retryAfterSeconds };
+      return { allowed: false, reason: "rate", retryAfterSeconds };
     }
 
     this.global.count += 1;
@@ -78,12 +90,18 @@ export class CatalogueRequestGuard {
     this.active += 1;
 
     let released = false;
+    let clientQuotaRefunded = false;
     return {
       allowed: true,
       release: () => {
         if (released) return;
         released = true;
         this.active = Math.max(0, this.active - 1);
+      },
+      refundClientQuota: () => {
+        if (clientQuotaRefunded) return;
+        clientQuotaRefunded = true;
+        client.count = Math.max(0, client.count - 1);
       },
     };
   }

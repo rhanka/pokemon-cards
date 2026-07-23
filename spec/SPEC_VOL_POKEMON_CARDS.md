@@ -6,19 +6,19 @@ Sa proposition de valeur : scanner sans limite et gratuitement, conserver la col
 
 ## Direction choisie
 
-- Caméra guidée et redressement local.
-- OCR et empreintes perceptuelles locaux dès le MVP ; retrieval par petit modèle INT8 uniquement après validation du corpus, du benchmark et de l'artefact navigateur.
+- Caméra guidée, recadrage et réencodage JPEG local avant envoi.
+- OCR Tesseract.js dans le service TypeScript Kubernetes ; petit modèle INT8 serveur uniquement après validation du corpus, des droits et du benchmark.
 - Top candidats et abstention ; aucune invention lorsque la confiance est faible.
 - Variante, langue et état confirmés par la personne ; état par défaut `inconnu`.
-- Photos non envoyées et non conservées par défaut.
+- Photos envoyées en TLS pour le scan, traitées uniquement en mémoire et supprimées avant réponse ; aucune conservation ni entraînement.
 - TCGdex comme catalogue primaire ; Pokémon TCG API comme source secondaire et de comparaison.
 - Aucun scraping de marketplace sans contrat explicite.
 - Collection et export gratuits ; Pass Cloud 4,99 USD pour cinq ans comme hypothèse de lancement.
 - Auth OIDC Sentropic en public client PKCE, désactivée tant que le client/audience et la sauvegarde cloud ne sont pas approuvés.
-- Scaleway Kapsule `poc` est la seule cible techniquement compatible mais reste NO-GO tant que capacité, tenant, DNS et sauvegarde ne sont pas prêts ; OVH reste hors périmètre jusqu'à activation réelle.
+- Scaleway Kapsule `poc` est la cible immédiate à 20m CPU demandé, sans nouveau nœud. OVH/PostgreSQL est la cible de montée en charge après validation de l'application.
 
 ## MVP versus évolution
 
-Le MVP livre immédiatement le cadrage guidé, l'OCR local, le reranking visuel des candidats, la recherche manuelle, la collection IndexedDB, la valeur sourcée, l'export et le protocole de sync. Il livre aussi le pipeline reproductible de génération de données, entraînement, benchmark et export du petit modèle.
+Le MVP livre immédiatement le cadrage guidé, l'OCR serveur transitoire, les candidats catalogue, la recherche manuelle, la collection IndexedDB, la valeur sourcée lorsqu'une source de prix est autorisée, l'import/export et le protocole de sync compact. Il livre aussi le pipeline reproductible de génération de données, entraînement, benchmark et export du petit modèle.
 
-Le passage du modèle en chemin principal est conditionné par le benchmark et les droits sur le corpus/poids. Cette prudence ne bloque pas l'application : elle fonctionne avec OCR + candidats + empreintes en attendant un checkpoint validé.
+Le passage du modèle en chemin principal est conditionné par le benchmark et les droits sur le corpus/poids. Cette prudence ne bloque pas l'application : elle fonctionne avec OCR serveur + candidats en attendant un checkpoint validé.

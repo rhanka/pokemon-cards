@@ -1,6 +1,6 @@
 # Image recognition model and dataset study
 
-Verified on 22 July 2026. CardScope does not call a metered general-purpose vision API. The intended production path is a small on-device retrieval model, with OCR and a perceptual hash as complementary signals.
+Verified on 22 July 2026. CardScope does not call a metered general-purpose Vision API. The shipped MVP runs Tesseract.js in the TypeScript service on Kubernetes. A small specialised ONNX retrieval model is the intended later accelerator once a legally usable corpus and weights pass release gates.
 
 ## What is already available
 
@@ -17,16 +17,25 @@ Verified on 22 July 2026. CardScope does not call a metered general-purpose visi
 
 ## Selected technical path
 
-The first useful version combines four cheap signals:
+The first useful version deliberately uses the smallest legally defensible path:
 
 1. a guided crop in the browser, so the MVP needs no object detector;
-2. local OCR for collector number and name fragments;
-3. a tiny RGB perceptual fingerprint to rerank catalogue candidates;
-4. once the rights and benchmark gates pass, a MobileNetV3-Small 224 px encoder producing a normalized 128-dimensional embedding.
+2. mandatory JPEG re-encoding in the browser to bound pixels and remove EXIF;
+3. one English/French Tesseract.js worker in Node for collector number and name fragments;
+4. catalogue lookup over authorised TCGdex metadata, followed by abstention and human confirmation.
 
-The encoder is trained with metric learning and hard negatives: same character across different sets, normal versus reverse/holo, reprints, and adjacent collector numbers. Training samples are synthesized in memory with perspective, glare, sleeve reflection, blur, shadow, colour-temperature shift, JPEG damage, and occlusion. Card UIDs—not individual photos—are isolated across train, validation, and test splits.
+The final Alpine image completed the real 600×825 Pikachu scan in 10.26 s cold
+and 5.23 s warm at a 300m CPU limit. Cgroup counters measured 3.22 CPU-s for
+the cold request and 1.66 CPU-s warm; planning deliberately charges 3.3 CPU-s
+for every scan. The final limited cgroup peaked at 134 MiB and returned to
+about 86 MiB without an OOM event; an earlier unrestricted run peaked around
+183 MiB RSS. Kubernetes requests 20m CPU but permits a 300m burst; recognition
+is serialized and has no in-memory queue. This is inexpensive at normal
+monthly usage, but not a promise to scan one million photos in a launch burst.
 
-The target INT8 model is at most 5 MiB. A 21,000-card reference index with 128 signed INT8 values per card is about 2.7 MB before compact IDs; it can be sharded by language/set and cached locally. Recognition therefore has no per-scan inference bill. EfficientNet-Lite0 is considered only if MobileNetV3 misses the release gates.
+The future encoder is trained with metric learning and hard negatives: same character across different sets, normal versus reverse/holo, reprints, and adjacent collector numbers. Training samples are synthesized in memory with perspective, glare, sleeve reflection, blur, shadow, colour-temperature shift, JPEG damage, and occlusion. Card UIDs—not individual photos—are isolated across train, validation, and test splits.
+
+The target INT8 model is at most 5 MiB. A 21,000-card reference index with 128 signed INT8 values per card is about 2.7 MB before compact IDs. It runs in the TypeScript recognizer, never as a Python backend. Recognition therefore has no metered per-scan provider bill. EfficientNet-Lite0 is considered only if MobileNetV3 misses the release gates.
 
 ## Corpus acquisition plan
 
@@ -47,7 +56,7 @@ The model remains optional until a named benchmark proves:
 - Recall@5 at least 99%, and 99.5% on cards valued above USD 20 when the slice is large enough;
 - open-set false-accept rate below 0.5%;
 - expected calibration error at most 5% with an explicit abstention threshold;
-- fewer than 5% identity corrections and end-to-end p95 below 250 ms on named low/mid-range phones;
-- model at most 5 MiB and at least 15 confirmed cards per minute in continuous use.
+- fewer than 5% identity corrections and an independently measured latency target on the release hardware;
+- model at most 5 MiB and higher confirmed-card throughput than the OCR baseline.
 
-Until then, the shipped fallback is honest: OCR + catalogue search + perceptual reranking + a top-candidate screen. The user confirms printing, language, finish, and condition; CardScope never claims authentication or automated grading.
+Until then, the shipped path is honest: server OCR + catalogue search + a top-candidate screen. The user confirms printing, language, finish, and condition; CardScope never claims authentication or automated grading.

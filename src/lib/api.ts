@@ -9,6 +9,7 @@ import type {
   ParsedCardText,
   PriceQuote,
   RuntimeConfig,
+  ServerRecognitionResult,
   ValuationPreference,
 } from "./types";
 import { selectPriceQuote } from "./value";
@@ -16,10 +17,27 @@ import { normalizeCurrency } from "./money";
 
 const defaultConfig: RuntimeConfig = {
   appName: "CardScope",
+  recognition: {
+    enabled: false,
+    processing: "server",
+    maxImageBytes: 2 * 1024 * 1024,
+  },
   auth: { enabled: false, scope: "openid profile email" },
-  vision: { enabled: false },
   sync: { enabled: false, retentionDays: 1826 },
+  valuation: { marketQuotesEnabled: false },
 };
+
+export class ApiRequestError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string | undefined,
+    readonly retryAfterSeconds: number | undefined,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
 
 async function apiFetch(
   path: string,
@@ -28,13 +46,30 @@ async function apiFetch(
 ): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set("accept", "application/json");
-  if (init.body) headers.set("content-type", "application/json");
+  if (init.body && !headers.has("content-type"))
+    headers.set("content-type", "application/json");
   if (session?.accessToken)
     headers.set("authorization", `Bearer ${session.accessToken}`);
   const response = await fetch(path, { ...init, headers });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    throw new Error(detail || `Request failed (${response.status})`);
+    let code: string | undefined;
+    let message = `Request failed (${response.status})`;
+    try {
+      const parsed = object(JSON.parse(detail));
+      const apiError = object(parsed.error);
+      code = string(apiError.code);
+      message = string(apiError.message) ?? message;
+    } catch {
+      if (detail) message = detail;
+    }
+    const retryAfter = Number(response.headers.get("retry-after"));
+    throw new ApiRequestError(
+      response.status,
+      code,
+      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
+      message,
+    );
   }
   return response;
 }
@@ -243,23 +278,30 @@ export async function loadRuntimeConfig(): Promise<RuntimeConfig> {
     });
     const raw = object(await response.json());
     const auth = object(raw.auth ?? raw.oidc);
-    const vision = object(raw.vision);
+    const recognition = object(raw.recognition);
     const sync = object(raw.sync);
+    const valuation = object(raw.valuation);
     return {
       appName: string(raw.appName ?? raw.app_name) ?? defaultConfig.appName,
+      recognition: {
+        enabled:
+          recognition.enabled === undefined
+            ? defaultConfig.recognition.enabled
+            : Boolean(recognition.enabled),
+        processing: "server",
+        maxImageBytes:
+          typeof recognition.maxImageBytes === "number"
+            ? recognition.maxImageBytes
+            : typeof recognition.max_image_bytes === "number"
+              ? recognition.max_image_bytes
+              : defaultConfig.recognition.maxImageBytes,
+      },
       auth: {
         enabled: Boolean(auth.enabled),
         issuer: string(auth.issuer ?? auth.authority),
         clientId: string(auth.clientId ?? auth.client_id),
         audience: string(auth.audience),
         scope: string(auth.scope) ?? defaultConfig.auth.scope,
-      },
-      vision: {
-        enabled: Boolean(vision.enabled),
-        moduleUrl: string(vision.moduleUrl ?? vision.module_url),
-        modelUrl: string(vision.modelUrl ?? vision.model_url),
-        indexUrl: string(vision.indexUrl ?? vision.index_url),
-        modelVersion: string(vision.modelVersion ?? vision.model_version),
       },
       sync: {
         enabled: Boolean(sync.enabled ?? auth.enabled),
@@ -270,10 +312,42 @@ export async function loadRuntimeConfig(): Promise<RuntimeConfig> {
               ? sync.retention_days
               : defaultConfig.sync.retentionDays,
       },
+      valuation: {
+        marketQuotesEnabled: Boolean(valuation.marketQuotesEnabled),
+      },
     };
   } catch {
     return defaultConfig;
   }
+}
+
+export async function recognizeCardImage(
+  image: Blob,
+  cardLanguage: CatalogLanguage,
+  signal?: AbortSignal,
+): Promise<ServerRecognitionResult> {
+  const params = new URLSearchParams({ language: cardLanguage });
+  const deadline = AbortSignal.timeout(40_000);
+  const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
+  const response = await apiFetch(
+    `/api/recognition/cards?${params.toString()}`,
+    {
+      method: "POST",
+      headers: { "content-type": "image/jpeg" },
+      body: image,
+      signal: requestSignal,
+    },
+  );
+  const raw = (await response.json()) as Omit<
+    ServerRecognitionResult,
+    "cards"
+  > & { cards?: unknown[] };
+  return {
+    ...raw,
+    cards: (Array.isArray(raw.cards) ? raw.cards : [])
+      .map((card) => normalizeCard(card, cardLanguage))
+      .filter((card): card is CatalogCard => card !== null),
+  };
 }
 
 export async function searchCatalog(

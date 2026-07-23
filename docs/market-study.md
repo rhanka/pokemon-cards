@@ -15,7 +15,7 @@ Verified on 22 July 2026. Prices are public list prices and may vary by country,
 
 Scanning is already a free acquisition feature. CardScope therefore optimizes the collector's return rather than charging for capture:
 
-- unlimited local scan and export without an account;
+- free privacy-bounded scan and export without an account;
 - a realistic net-sale range after condition, fees, postage, liquidity, and quote age;
 - cost basis and gain/loss;
 - duplicates and the cards worth verifying, grading, selling, or trading first;
@@ -27,7 +27,10 @@ The target moment is not “your binder is worth a spectacular amount.” It is 
 ## Pilot metrics
 
 - first useful recognition in under 30 seconds;
-- at least 15 cards per minute in continuous mode;
+- measured warm p95 below 15 seconds on the 300m POC limit, with busy
+  backpressure rather than a hidden queue;
+- bulk CSV/JSON import for an existing 1,000-card collection; photo scanning
+  is for progressive capture, not a one-million-photo launch burst;
 - fewer than 5% manual identity corrections;
 - median user value at least ten times the Cloud Pass, measured as time saved or missed value avoided;
 - at least 25% Cloud Pass conversion by the first 1,000 accounts, otherwise revisit packaging or costs.

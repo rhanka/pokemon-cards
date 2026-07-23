@@ -177,6 +177,37 @@ export interface RecognitionCandidate {
   hashScore: number | null;
 }
 
+export interface OcrLine {
+  text: string;
+  confidence: number;
+}
+
+export interface ParsedCardText {
+  rawText: string;
+  name?: string;
+  number?: string;
+  setTotal?: string;
+  query: string;
+  confidence: number;
+  signals: string[];
+}
+
+export type RecognitionEvidence = Omit<ParsedCardText, "rawText">;
+
+export interface ServerRecognitionResult {
+  evidence: RecognitionEvidence;
+  cards: PokemonCard[];
+  visualMatches: Array<{
+    cardId: string;
+    similarity: number;
+    provider: "server-model";
+  }>;
+  engine: "tesseract" | "onnx";
+  modelVersion: string | null;
+  durationMs: number;
+  photoRetained: false;
+}
+
 export interface RecognitionResult {
   candidates: RecognitionCandidate[];
   acceptedCardId: string | null;
@@ -186,6 +217,11 @@ export interface RecognitionResult {
 }
 
 export interface PublicAppConfig {
+  recognition: {
+    enabled: boolean;
+    processing: "server";
+    maxImageBytes: number;
+  };
   auth: {
     enabled: boolean;
     issuer: string | null;
@@ -202,7 +238,11 @@ export interface PublicAppConfig {
     primary: CatalogueSource;
     secondary: CatalogueSource;
   };
+  valuation: {
+    marketQuotesEnabled: boolean;
+  };
   privacy: {
-    photosUploadedByDefault: false;
+    photosUploadedForRecognition: boolean;
+    photosRetained: false;
   };
 }

@@ -22,6 +22,120 @@ export type AddHoldingInput = {
 };
 
 export const MAX_HOLDING_QUANTITY = 100_000;
+const PRICE_QUOTE_SNAPSHOT_KEYS = [
+  "id",
+  "source",
+  "sourceUrl",
+  "market",
+  "currency",
+  "sku",
+  "condition",
+  "conditionIncluded",
+  "finish",
+  "low",
+  "marketPrice",
+  "high",
+  "volume",
+  "liquidity",
+  "observedAt",
+  "staleAfter",
+] as const satisfies readonly (keyof PriceQuote)[];
+const CATALOG_CARD_SNAPSHOT_KEYS = [
+  "id",
+  "name",
+  "number",
+  "printedNumber",
+  "setId",
+  "setName",
+  "language",
+  "rarity",
+  "releaseDate",
+  "images",
+  "quote",
+  "quotes",
+  "externalIds",
+  "reference",
+] as const satisfies readonly (keyof CatalogCard)[];
+const CARD_IMAGE_SNAPSHOT_KEYS = [
+  "small",
+  "large",
+] as const satisfies readonly (keyof NonNullable<CatalogCard["images"]>)[];
+const CARD_REFERENCE_SNAPSHOT_KEYS = [
+  "perceptualHash",
+  "rgbHash",
+] as const satisfies readonly (keyof NonNullable<CatalogCard["reference"]>)[];
+
+function snapshotAllowedObject(
+  value: unknown,
+  keys: readonly string[],
+): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const source = value as Record<string, unknown>;
+  const snapshot: Record<string, unknown> = {};
+  for (const key of keys) {
+    const item = source[key];
+    if (item !== undefined) snapshot[key] = item;
+  }
+  return snapshot;
+}
+
+export function snapshotPriceQuote(quote: PriceQuote): PriceQuote {
+  return snapshotAllowedObject(quote, PRICE_QUOTE_SNAPSHOT_KEYS) as PriceQuote;
+}
+
+function catalogCardSnapshot(card: CatalogCard): CatalogCard {
+  // A recognition candidate structurally extends CatalogCard with score
+  // metadata. TypeScript permits that value at this boundary, but strict
+  // event validation must never persist transient ranking fields. Svelte
+  // state is also a deep Proxy, which structuredClone intentionally rejects.
+  // Copy each nested JSON contract explicitly while retaining non-finite
+  // numbers so runtime validation rejects them instead of coercing them.
+  const snapshot = snapshotAllowedObject(
+    card,
+    CATALOG_CARD_SNAPSHOT_KEYS,
+  ) as Record<string, unknown>;
+  if (snapshot.images !== undefined) {
+    snapshot.images = snapshotAllowedObject(
+      snapshot.images,
+      CARD_IMAGE_SNAPSHOT_KEYS,
+    );
+  }
+  if (snapshot.quote !== undefined) {
+    snapshot.quote = snapshotPriceQuote(snapshot.quote as PriceQuote);
+  }
+  if (Array.isArray(snapshot.quotes)) {
+    snapshot.quotes = snapshot.quotes.map((quote) =>
+      snapshotPriceQuote(quote as PriceQuote),
+    );
+  }
+  if (
+    snapshot.externalIds &&
+    typeof snapshot.externalIds === "object" &&
+    !Array.isArray(snapshot.externalIds)
+  ) {
+    snapshot.externalIds = Object.fromEntries(
+      Object.entries(snapshot.externalIds),
+    );
+  }
+  if (snapshot.reference !== undefined) {
+    const reference = snapshotAllowedObject(
+      snapshot.reference,
+      CARD_REFERENCE_SNAPSHOT_KEYS,
+    );
+    if (
+      reference &&
+      typeof reference === "object" &&
+      !Array.isArray(reference)
+    ) {
+      const plainReference = reference as Record<string, unknown>;
+      if (Array.isArray(plainReference.rgbHash)) {
+        plainReference.rgbHash = [...plainReference.rgbHash];
+      }
+    }
+    snapshot.reference = reference;
+  }
+  return snapshot as CatalogCard;
+}
 
 export function normalizeHoldingQuantity(value: number): number {
   if (
@@ -52,15 +166,17 @@ export function createHolding(
   input: AddHoldingInput,
   occurredAt = new Date().toISOString(),
 ): Holding {
+  const card = catalogCardSnapshot(input.card);
   return {
     id: makeId("holding"),
-    cardId: input.card.id,
-    card: input.card,
+    cardId: card.id,
+    card,
     quantity: normalizeHoldingQuantity(input.quantity ?? 1),
     finish: input.finish,
     condition: input.condition,
     unitCost: input.unitCost,
-    quote: input.quote ?? input.card.quote,
+    quote:
+      input.quote === undefined ? card.quote : snapshotPriceQuote(input.quote),
     note: input.note,
     acquiredAt: input.acquiredAt,
     addedAt: occurredAt,

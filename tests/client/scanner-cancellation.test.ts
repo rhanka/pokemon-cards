@@ -2,37 +2,37 @@ import { cleanup, render, screen } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { ServerRecognitionResult } from "../../shared/types";
+
 const scanner = vi.hoisted(() => ({
-  recognizeCardText: vi.fn(),
+  recognizeCardImage: vi.fn(),
   searchCatalog: vi.fn(),
   prepareImageForRecognition: vi.fn(async (blob: Blob) => blob),
-  fingerprintImage: vi.fn(async () => ({ hash: "fingerprint" })),
-}));
-
-vi.mock("../../src/lib/ocr", () => ({
-  parseCardText: vi.fn(),
-  recognizeCardText: scanner.recognizeCardText,
 }));
 
 vi.mock("../../src/lib/api", () => ({
   getCatalogCard: vi.fn(),
+  recognizeCardImage: scanner.recognizeCardImage,
   searchCatalog: scanner.searchCatalog,
 }));
 
-vi.mock("../../src/lib/image-fingerprint", () => ({
+vi.mock("../../src/lib/image-upload", () => ({
   prepareImageForRecognition: scanner.prepareImageForRecognition,
-  fingerprintImage: scanner.fingerprintImage,
-  rerankWithReferenceImages: vi.fn(async () => []),
 }));
 
 import ScannerPage from "../../src/lib/components/ScannerPage.svelte";
-import type { ParsedCardText, RuntimeConfig } from "../../src/lib/types";
+import type { RuntimeConfig } from "../../src/lib/types";
 
 const config: RuntimeConfig = {
   appName: "CardScope",
+  recognition: {
+    enabled: true,
+    processing: "server",
+    maxImageBytes: 2 * 1024 * 1024,
+  },
   auth: { enabled: false, scope: "openid" },
-  vision: { enabled: false },
   sync: { enabled: false, retentionDays: 1826 },
+  valuation: { marketQuotesEnabled: false },
 };
 
 afterEach(() => {
@@ -41,19 +41,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("scanner OCR cancellation", () => {
-  it("should abort OCR and ignore a result that resolves after cancellation", async () => {
-    let resolveRecognition: ((value: ParsedCardText) => void) | undefined;
+describe("scanner server-recognition cancellation", () => {
+  it("should abort the upload and ignore a late recognition result", async () => {
+    let resolveRecognition:
+      ((value: ServerRecognitionResult) => void) | undefined;
     let recognitionSignal: AbortSignal | undefined;
-    scanner.recognizeCardText.mockImplementation(
-      (
-        _blob: Blob,
-        _languages: string,
-        _progress: unknown,
-        options: { signal: AbortSignal },
-      ) => {
-        recognitionSignal = options.signal;
-        return new Promise<ParsedCardText>((resolve) => {
+    scanner.recognizeCardImage.mockImplementation(
+      (_blob: Blob, _language: string, signal: AbortSignal) => {
+        recognitionSignal = signal;
+        return new Promise<ServerRecognitionResult>((resolve) => {
           resolveRecognition = resolve;
         });
       },
@@ -77,7 +73,7 @@ describe("scanner OCR cancellation", () => {
       new File(["image"], "card.jpg", { type: "image/jpeg" }),
     );
     expect(
-      await screen.findByText("Reading the card locally"),
+      await screen.findByText("Reading the card securely"),
     ).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -87,13 +83,20 @@ describe("scanner OCR cancellation", () => {
       screen.getByRole("button", { name: "Use camera" }),
     ).toBeInTheDocument();
     resolveRecognition?.({
-      rawText: "Pikachu\n025/165",
-      name: "Pikachu",
-      number: "025",
-      setTotal: "165",
-      query: "Pikachu 025/165",
-      confidence: 0.95,
-      signals: ["card-name", "collector-number"],
+      evidence: {
+        name: "Pikachu",
+        number: "025",
+        setTotal: "165",
+        query: "Pikachu 025/165",
+        confidence: 0.95,
+        signals: ["card-name", "collector-number"],
+      },
+      cards: [],
+      visualMatches: [],
+      engine: "tesseract",
+      modelVersion: "test",
+      durationMs: 1,
+      photoRetained: false,
     });
     await Promise.resolve();
     await Promise.resolve();

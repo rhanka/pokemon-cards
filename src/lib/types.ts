@@ -1,3 +1,5 @@
+import type { ServerRecognitionResult as ApiServerRecognitionResult } from "../../shared/types";
+
 export type Locale = "en" | "fr";
 
 export type AppView = "scanner" | "collection" | "insights" | "settings";
@@ -66,30 +68,19 @@ export type CatalogCard = {
   };
 };
 
-export type OcrLine = {
-  text: string;
-  confidence: number;
-};
+export type { OcrLine, ParsedCardText } from "../../shared/types";
 
-export type ParsedCardText = {
-  rawText: string;
-  name?: string;
-  number?: string;
-  setTotal?: string;
-  query: string;
-  confidence: number;
-  signals: string[];
-};
-
-export type ImageFingerprint = {
-  perceptualHash: string;
-  rgbHash: number[];
+export type ServerRecognitionResult = Omit<
+  ApiServerRecognitionResult,
+  "cards"
+> & {
+  cards: CatalogCard[];
 };
 
 export type VisualMatch = {
   cardId: string;
   similarity: number;
-  provider: "local-model" | "reference-image";
+  provider: "local-model" | "reference-image" | "server-model";
 };
 
 export type RecognitionCandidate = CatalogCard & {
@@ -113,6 +104,11 @@ export type RecognitionDecision = {
 
 export type RuntimeConfig = {
   appName: string;
+  recognition: {
+    enabled: boolean;
+    processing: "server";
+    maxImageBytes: number;
+  };
   auth: {
     enabled: boolean;
     issuer?: string;
@@ -120,16 +116,12 @@ export type RuntimeConfig = {
     audience?: string;
     scope: string;
   };
-  vision: {
-    enabled: boolean;
-    moduleUrl?: string;
-    modelUrl?: string;
-    indexUrl?: string;
-    modelVersion?: string;
-  };
   sync: {
     enabled: boolean;
     retentionDays: number;
+  };
+  valuation: {
+    marketQuotesEnabled: boolean;
   };
 };
 

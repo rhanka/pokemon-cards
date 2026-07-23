@@ -18,6 +18,7 @@ ml/data/
 __pycache__/
 .pytest_cache/
 /public/ocr/
+/recognition-data/
 
 # Local h2a identities, private keys, mailboxes, and protocol state
 .h2a-schema.json

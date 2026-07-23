@@ -67,6 +67,30 @@ describe("recognition scoring", () => {
     expect(decideRecognition(weak).status).toBe("no-match");
   });
 
+  it("should require two independent signals before auto-selecting one candidate", () => {
+    const numberOnly: ParsedCardText = {
+      rawText: "58/102",
+      number: "58",
+      setTotal: "102",
+      query: "58/102",
+      confidence: 0.56,
+      signals: ["collector-number", "set-total"],
+    };
+    const result = decideRecognition(
+      scoreCandidates(numberOnly, [
+        {
+          id: "base1-58",
+          name: "Pikachu",
+          printedNumber: "58",
+          setName: "Base Set",
+        },
+      ]),
+    );
+
+    expect(result.best?.matchReasons).toEqual(["number"]);
+    expect(result.status).toBe("review");
+  });
+
   it("should match accents and small OCR spelling differences", () => {
     expect(textSimilarity("Flabébé", "Flabebe")).toBe(1);
     expect(textSimilarity("Ninetales", "Ninetale5")).toBeGreaterThan(0.75);

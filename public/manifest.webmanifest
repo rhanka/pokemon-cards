@@ -1,7 +1,7 @@
 {
   "name": "CardScope — Card scanner and value",
   "short_name": "CardScope",
-  "description": "Private, local-first Pokémon card recognition and valuation.",
+  "description": "Privacy-first Pokémon card recognition, collection, and valuation.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f4f1e8",

@@ -231,9 +231,14 @@ describe("scanner language choice", () => {
   it("should keep scan controls disabled until the printed card language is explicitly selected", async () => {
     const config: RuntimeConfig = {
       appName: "CardScope",
+      recognition: {
+        enabled: true,
+        processing: "server",
+        maxImageBytes: 2 * 1024 * 1024,
+      },
       auth: { enabled: false, scope: "openid" },
-      vision: { enabled: false },
       sync: { enabled: false, retentionDays: 1826 },
+      valuation: { marketQuotesEnabled: false },
     };
     render(ScannerPage, {
       locale: "en",

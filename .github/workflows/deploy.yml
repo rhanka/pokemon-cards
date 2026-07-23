@@ -124,8 +124,8 @@ jobs:
           test -n "$HARD_MEMORY"
           CPU_REMAINING="$(( $(cpu_millis "$HARD_CPU") - $(cpu_millis "$USED_CPU") ))"
           MEMORY_REMAINING="$(( $(memory_mib "$HARD_MEMORY") - $(memory_mib "$USED_MEMORY") ))"
-          test "$CPU_REMAINING" -ge 50
-          test "$MEMORY_REMAINING" -ge 128
+          test "$CPU_REMAINING" -ge 20
+          test "$MEMORY_REMAINING" -ge 256
       - name: Server-side dry-run
         run: kubectl apply --server-side --dry-run=server -f "$RENDERED_MANIFEST" -o name
       - name: Apply and wait

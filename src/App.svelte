@@ -43,9 +43,14 @@
 
   const defaultConfig: RuntimeConfig = {
     appName: "CardScope",
+    recognition: {
+      enabled: false,
+      processing: "server",
+      maxImageBytes: 2 * 1024 * 1024,
+    },
     auth: { enabled: false, scope: "openid profile email" },
-    vision: { enabled: false },
     sync: { enabled: false, retentionDays: 1826 },
+    valuation: { marketQuotesEnabled: false },
   };
   const emptySnapshot: CollectionSnapshot = {
     holdings: [],
@@ -412,6 +417,12 @@
       <div class="offline-banner" role="status">
         <Icon name="wifi-off" size={17} />
         {translate(locale, "common.offline")}
+      </div>
+    {/if}
+    {#if !loading && !config.valuation.marketQuotesEnabled}
+      <div class="valuation-banner" role="status">
+        <Icon name="shield" size={17} />
+        {translate(locale, "app.valuationPending")}
       </div>
     {/if}
 

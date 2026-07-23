@@ -15,7 +15,7 @@ The five-year Cloud Pass is not backed by a Kubernetes volume snapshot alone. Re
 
 ## Current gate
 
-No backup CronJob is enabled in this repository because the destination bucket, residency, KMS/IAM secret, lifecycle, and cost have not yet been approved by the infrastructure/data owner. The live general node also had only 24m unrequested CPU while a safe backup Job needs roughly 50m/128Mi.
+No backup CronJob is enabled in this repository because the destination bucket, residency, KMS/IAM secret, lifecycle, and cost have not yet been approved by the infrastructure/data owner. The latest live check found only 34m nominal CPU headroom before scheduling the 20m POC app. The tenant also caps aggregate requested memory at 256 MiB, exactly the app request, so even a small concurrent backup Job needs an explicit quota/capacity review. No backup Job or second node is authorised in this phase.
 
 Production Cloud Pass claims remain disabled until:
 

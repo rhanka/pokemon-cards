@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getCatalogCard,
+  recognizeCardImage,
   searchCatalog,
   syncCollectionEvents,
 } from "../../src/lib/api";
@@ -30,6 +31,60 @@ afterEach(() => {
 });
 
 describe("client API adapter", () => {
+  it("should upload a cropped JPEG to the server recognition contract", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        evidence: {
+          name: "Pikachu",
+          number: "58",
+          setTotal: "102",
+          query: "Pikachu 58/102",
+          confidence: 0.95,
+          signals: ["card-name", "collector-number"],
+        },
+        cards: [
+          {
+            id: "pokemon-card:fr:base1:58:pikachu",
+            name: "Pikachu",
+            number: "58",
+            language: "fr",
+            set: { id: "base1", name: "Set de Base" },
+            images: {},
+          },
+        ],
+        visualMatches: [],
+        engine: "tesseract",
+        modelVersion: "test",
+        durationMs: 10,
+        photoRetained: false,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const image = new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], {
+      type: "image/jpeg",
+    });
+
+    const result = await recognizeCardImage(image, "fr");
+
+    const requestUrl = new URL(
+      String(fetchMock.mock.calls[0]?.[0]),
+      "https://cards.example.test",
+    );
+    const request = fetchMock.mock.calls[0]?.[1];
+    expect(requestUrl.pathname).toBe("/api/recognition/cards");
+    expect(requestUrl.searchParams.get("language")).toBe("fr");
+    expect(request?.method).toBe("POST");
+    expect(new Headers(request?.headers).get("content-type")).toBe(
+      "image/jpeg",
+    );
+    expect(request?.body).toBe(image);
+    expect(result).toMatchObject({
+      evidence: { name: "Pikachu", number: "58" },
+      cards: [{ name: "Pikachu", language: "fr" }],
+      photoRetained: false,
+    });
+  });
+
   it("should call the exact catalogue search contract", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       jsonResponse({

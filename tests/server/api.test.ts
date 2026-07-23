@@ -13,6 +13,10 @@ import {
 import { CatalogueService } from "../../server/catalog/service.js";
 import { SqliteStore } from "../../server/store.js";
 import {
+  RecognitionBusyError,
+  type RecognitionEngine,
+} from "../../server/recognition.js";
+import {
   FIXED_NOW,
   testAdapter,
   testCard,
@@ -35,6 +39,7 @@ function testDependencies(
     authenticator?: Authenticator;
     staticRoot?: string | null;
     configure?: (config: ReturnType<typeof testConfig>) => void;
+    recognizer?: RecognitionEngine;
   } = {},
 ) {
   const config = testConfig();
@@ -79,9 +84,35 @@ function testDependencies(
     clock: () => FIXED_NOW,
   });
   const authenticator = options.authenticator ?? authenticated;
+  const recognizer: RecognitionEngine = options.recognizer ?? {
+    async recognize() {
+      return {
+        evidence: {
+          name: "Pikachu",
+          number: "58",
+          setTotal: "102",
+          query: "Pikachu 58/102",
+          confidence: 0.95,
+          signals: ["collector-number", "set-total", "card-name"],
+        },
+        visualMatches: [],
+        engine: "tesseract",
+        modelVersion: "test-engine",
+        durationMs: 12,
+        photoRetained: false,
+      };
+    },
+    async close() {},
+  };
   return {
     store,
-    app: createApp({ config, store, catalogue, authenticator }),
+    app: createApp({
+      config,
+      store,
+      catalogue,
+      authenticator,
+      recognizer,
+    }),
   };
 }
 
@@ -166,6 +197,183 @@ describe("CardScope API", () => {
       expect(await limited.json()).toMatchObject({
         error: { code: "catalogue_rate_limited" },
       });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should accept a bounded JPEG for transient server recognition", async () => {
+    const recognize = vi.fn(async () => ({
+      evidence: {
+        name: "Pikachu",
+        number: "58",
+        setTotal: "102",
+        query: "Pikachu 58/102",
+        confidence: 0.95,
+        signals: ["collector-number", "set-total", "card-name"],
+      },
+      visualMatches: [],
+      engine: "tesseract" as const,
+      modelVersion: "test-engine",
+      durationMs: 12,
+      photoRetained: false as const,
+    }));
+    const { app, store } = testDependencies({
+      recognizer: { recognize, async close() {} },
+    });
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+    try {
+      const response = await app.request("/api/recognition/cards?language=en", {
+        method: "POST",
+        headers: { "content-type": "image/jpeg" },
+        body: jpeg,
+      });
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(recognize).toHaveBeenCalledOnce();
+      expect(body).toMatchObject({
+        evidence: { name: "Pikachu", number: "58" },
+        cards: [{ name: "Pikachu", number: "58" }],
+        engine: "tesseract",
+        photoRetained: false,
+      });
+      expect(JSON.stringify(body)).not.toContain("rawText");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should fail closed for disabled, invalid, oversized, or busy recognition", async () => {
+    const busy: RecognitionEngine = {
+      async recognize() {
+        throw new RecognitionBusyError();
+      },
+      async close() {},
+    };
+    const { app, store } = testDependencies({
+      recognizer: busy,
+      configure(config) {
+        config.recognition.maxImageBytes = 8;
+      },
+    });
+    try {
+      const wrongMedia = await app.request(
+        "/api/recognition/cards?language=en",
+        {
+          method: "POST",
+          headers: { "content-type": "image/png" },
+          body: new Uint8Array([1]),
+        },
+      );
+      const oversized = await app.request(
+        "/api/recognition/cards?language=en",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "image/jpeg",
+            "content-length": "9",
+          },
+          body: new Uint8Array(9),
+        },
+      );
+      const busyResponse = await app.request(
+        "/api/recognition/cards?language=fr",
+        {
+          method: "POST",
+          headers: { "content-type": "image/jpeg" },
+          body: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+        },
+      );
+
+      expect(wrongMedia.status).toBe(415);
+      expect(oversized.status).toBe(413);
+      expect(busyResponse.status).toBe(429);
+      expect(busyResponse.headers.get("retry-after")).toBe("10");
+      expect(await busyResponse.json()).toMatchObject({
+        error: { code: "recognition_busy" },
+      });
+    } finally {
+      store.close();
+    }
+
+    const disabled = testDependencies({
+      configure(config) {
+        config.recognition.enabled = false;
+      },
+    });
+    try {
+      const response = await disabled.app.request(
+        "/api/recognition/cards?language=en",
+        {
+          method: "POST",
+          headers: { "content-type": "image/jpeg" },
+          body: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+        },
+      );
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({
+        error: { code: "recognition_disabled" },
+      });
+    } finally {
+      disabled.store.close();
+    }
+  });
+
+  it("should refund busy client quota while retaining the global upload bound", async () => {
+    let attempts = 0;
+    const recognize = vi.fn(async () => {
+      attempts += 1;
+      if (attempts <= 2) throw new RecognitionBusyError();
+      return {
+        evidence: {
+          name: "Pikachu",
+          number: "58",
+          setTotal: "102",
+          query: "Pikachu 58/102",
+          confidence: 0.95,
+          signals: ["collector-number", "set-total", "card-name"],
+        },
+        visualMatches: [],
+        engine: "tesseract" as const,
+        modelVersion: "test-engine",
+        durationMs: 12,
+        photoRetained: false as const,
+      };
+    });
+    const { app, store } = testDependencies({
+      recognizer: { recognize, async close() {} },
+      configure(config) {
+        config.recognition.rateLimitPerMinute = 1;
+        config.recognition.globalRateLimitPerMinute = 3;
+        config.recognition.maxConcurrentUploads = 1;
+      },
+    });
+    const request = (client = "198.51.100.10") =>
+      app.request("/api/recognition/cards?language=en", {
+        method: "POST",
+        headers: {
+          "content-type": "image/jpeg",
+          "x-forwarded-for": client,
+        },
+        body: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+      });
+
+    try {
+      const firstBusy = await request();
+      const secondBusy = await request();
+      const accepted = await request();
+      const globallyLimited = await request("198.51.100.20");
+
+      expect((await firstBusy.json()).error.code).toBe("recognition_busy");
+      expect((await secondBusy.json()).error.code).toBe("recognition_busy");
+      expect(accepted.status).toBe(200);
+      expect(globallyLimited.status).toBe(429);
+      expect(await globallyLimited.json()).toMatchObject({
+        error: { code: "recognition_rate_limited" },
+      });
+      expect(recognize).toHaveBeenCalledTimes(3);
     } finally {
       store.close();
     }
@@ -501,7 +709,6 @@ describe("CardScope API", () => {
   it("should serve built assets and the SPA fallback without intercepting unknown API routes", async () => {
     const staticRoot = mkdtempSync(path.join(tmpdir(), "cardscope-static-"));
     mkdirSync(path.join(staticRoot, "assets"));
-    mkdirSync(path.join(staticRoot, "ocr", "v6"), { recursive: true });
     writeFileSync(
       path.join(staticRoot, "index.html"),
       "<main>CardScope shell</main>",
@@ -510,20 +717,16 @@ describe("CardScope API", () => {
       path.join(staticRoot, "assets", "app.js"),
       "globalThis.cardscope = true;",
     );
-    writeFileSync(path.join(staticRoot, "ocr", "v6", "worker.min.js"), "");
     const { app, store } = testDependencies({ staticRoot });
 
     try {
       const assetResponse = await app.request("/assets/app.js");
-      const ocrResponse = await app.request("/ocr/v6/worker.min.js");
       const routeResponse = await app.request("/collection/pikachu");
       const unknownApiResponse = await app.request("/api/does-not-exist");
 
       expect(assetResponse.status).toBe(200);
       expect(await assetResponse.text()).toContain("cardscope = true");
       expect(assetResponse.headers.get("cache-control")).toContain("immutable");
-      expect(ocrResponse.status).toBe(200);
-      expect(ocrResponse.headers.get("cache-control")).toContain("immutable");
       expect(routeResponse.status).toBe(200);
       expect(await routeResponse.text()).toContain("CardScope shell");
       expect(unknownApiResponse.status).toBe(404);
