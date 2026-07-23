@@ -5,10 +5,14 @@ import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 
+import { syncOperationSchema } from "../shared/collection-event-schema.js";
 import {
   CARD_LANGUAGES,
   type CardLanguage,
+  type CatalogueMetadata,
+  type CatalogueSearchResult,
   type CatalogueSource,
+  type PokemonCard,
   type SyncRequest,
 } from "../shared/types.js";
 import {
@@ -31,6 +35,10 @@ import {
 import { loadConfig, toPublicConfig, type RuntimeConfig } from "./config.js";
 import {
   SqliteStore,
+  SyncEnrollmentConflictError,
+  SyncGenerationMismatchError,
+  SyncOperationConflictError,
+  SyncOperationInvalidError,
   SyncOperationTooLargeError,
   SyncStorageLimitError,
 } from "./store.js";
@@ -42,10 +50,13 @@ import {
   TesseractRecognitionEngine,
 } from "./recognition.js";
 
+type CatalogueLanguageMode = CardLanguage | "auto";
+
 interface AppEnvironment {
   Variables: {
     principal: AuthPrincipal;
-    recognitionLanguage: CardLanguage;
+    recognitionLanguage: CatalogueLanguageMode;
+    recognitionSignal: AbortSignal;
     recognitionUploadLease: Extract<CatalogueGuardLease, { allowed: true }>;
   };
 }
@@ -63,46 +74,22 @@ export interface AppRuntime extends AppDependencies {
   close: () => Promise<void>;
 }
 
-const isoDate = z.string().datetime({ offset: true });
-const identifier = z.string().trim().min(1).max(160);
-const opaqueObject = z.record(z.string(), z.unknown());
-const syncOperationBase = {
-  id: identifier,
-  deviceId: identifier,
-  holdingId: identifier,
-  occurredAt: isoDate,
-  syncedAt: isoDate.optional(),
-};
-const syncOperation = z.discriminatedUnion("type", [
-  z
-    .object({
-      ...syncOperationBase,
-      type: z.literal("holding.added"),
-      payload: z.object({ holding: opaqueObject }).passthrough(),
-    })
-    .strict(),
-  z
-    .object({
-      ...syncOperationBase,
-      type: z.literal("holding.quantity-adjusted"),
-      payload: z.object({ delta: z.number().int() }).passthrough(),
-    })
-    .strict(),
-  z
-    .object({
-      ...syncOperationBase,
-      type: z.literal("holding.updated"),
-      payload: opaqueObject,
-    })
-    .strict(),
-  z
-    .object({
-      ...syncOperationBase,
-      type: z.literal("holding.removed"),
-      payload: opaqueObject,
-    })
-    .strict(),
+const syncGeneration = z
+  .string()
+  .regex(/^[1-9]\d*$/)
+  .refine((value) => Number.isSafeInteger(Number(value)), {
+    message: "Sync generation must be a safe positive integer string",
+  });
+const catalogueLanguageMode = z.union([
+  z.enum(CARD_LANGUAGES),
+  z.literal("auto"),
 ]);
+const RECOGNITION_E2E_TIMEOUT_MS = 35_000;
+const AUTO_LANGUAGE_CARD_LIMIT = 24;
+const AUTO_LANGUAGE_PER_LANGUAGE_LIMIT = 12;
+const SYNC_PER_SUBJECT_PER_MINUTE = 60;
+const SYNC_GLOBAL_PER_MINUTE = 600;
+const SYNC_MAX_CONCURRENT_REQUESTS = 8;
 const syncBodyLimit = bodyLimit({
   maxSize: 2 * 1024 * 1024,
   onError: (context) =>
@@ -116,6 +103,120 @@ const syncBodyLimit = bodyLimit({
       413,
     ),
 });
+
+function signalReason(signal: AbortSignal): unknown {
+  return (
+    signal.reason ?? new DOMException("Recognition was cancelled", "AbortError")
+  );
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw signalReason(signal);
+}
+
+function interleaveCards(
+  lists: readonly PokemonCard[][],
+  limit: number,
+): PokemonCard[] {
+  const cards: PokemonCard[] = [];
+  const seen = new Set<string>();
+  const longest = Math.max(0, ...lists.map((list) => list.length));
+  for (let index = 0; index < longest && cards.length < limit; index += 1) {
+    for (const list of lists) {
+      const card = list[index];
+      if (!card || seen.has(card.id)) continue;
+      seen.add(card.id);
+      cards.push(card);
+      if (cards.length >= limit) break;
+    }
+  }
+  return cards;
+}
+
+function mergedCatalogueMetadata(
+  results: readonly CatalogueSearchResult[],
+): CatalogueMetadata {
+  const first = results[0]?.metadata;
+  if (!first) throw new CatalogueUnavailableError();
+  const cache: CatalogueMetadata["cache"] = results.some(
+    ({ metadata }) => metadata.cache === "stale",
+  )
+    ? "stale"
+    : results.some(({ metadata }) => metadata.cache === "miss")
+      ? "miss"
+      : "hit";
+  const warnings = [
+    ...new Set(
+      results
+        .map(({ metadata }) => metadata.warning)
+        .filter((warning): warning is string => Boolean(warning)),
+    ),
+  ];
+  return {
+    ...first,
+    cache,
+    stale: results.some(({ metadata }) => metadata.stale),
+    fetchedAt: results.map(({ metadata }) => metadata.fetchedAt).sort()[0],
+    staleAfter: results.map(({ metadata }) => metadata.staleAfter).sort()[0],
+    ...(warnings.length ? { warning: warnings.join(" ") } : {}),
+  };
+}
+
+async function searchCatalogueLanguages(input: {
+  catalogue: CatalogueService;
+  query: string;
+  language: CatalogueLanguageMode;
+  perLanguageLimit: number;
+  maxCards: number;
+  signal?: AbortSignal;
+}): Promise<CatalogueSearchResult> {
+  throwIfAborted(input.signal);
+  if (input.language !== "auto") {
+    const result = await input.catalogue.search(
+      input.query,
+      input.language,
+      input.perLanguageLimit,
+      input.signal,
+    );
+    return { ...result, cards: result.cards.slice(0, input.maxCards) };
+  }
+
+  const settled = await Promise.allSettled(
+    CARD_LANGUAGES.map((language) =>
+      input.catalogue.search(
+        input.query,
+        language,
+        input.perLanguageLimit,
+        input.signal,
+      ),
+    ),
+  );
+  const results: CatalogueSearchResult[] = [];
+  for (let index = 0; index < settled.length; index += 1) {
+    const result = settled[index];
+    const language = CARD_LANGUAGES[index];
+    if (!result || !language) throw new CatalogueUnavailableError();
+    if (result.status === "rejected") throw result.reason;
+    if (
+      result.value.cards.some((card) => card.language !== language) ||
+      (language === "fr" && result.value.metadata.source === "pokemon_tcg")
+    ) {
+      throw new CatalogueUnavailableError(
+        `${language.toUpperCase()} catalogue results are unavailable`,
+      );
+    }
+    results.push(result.value);
+  }
+  throwIfAborted(input.signal);
+  return {
+    query: input.query,
+    cards: interleaveCards(
+      results.map(({ cards }) => cards.slice(0, input.perLanguageLimit)),
+      Math.min(input.maxCards, AUTO_LANGUAGE_CARD_LIMIT),
+    ),
+    metadata: mergedCatalogueMetadata(results),
+  };
+}
 
 function invalidRequest(issues: z.core.$ZodIssue[]) {
   return {
@@ -185,6 +286,7 @@ function requestClientId(request: Request): string {
 function syncStoreOptions(config: RuntimeConfig) {
   return {
     retentionDays: config.sync.retentionDays,
+    maxAccounts: config.sync.maxAccounts,
     maxOperationBytes: config.sync.maxOperationBytes,
     maxAccountEvents: config.sync.maxAccountEvents,
     maxAccountBytes: config.sync.maxAccountBytes,
@@ -193,6 +295,54 @@ function syncStoreOptions(config: RuntimeConfig) {
 }
 
 function syncErrorResponse(context: Context<AppEnvironment>, error: unknown) {
+  if (error instanceof SyncEnrollmentConflictError) {
+    return context.json(
+      {
+        error: {
+          code: "sync_enrollment_conflict",
+          message: error.message,
+          currentEventCount: error.currentEventCount,
+        },
+      },
+      409,
+    );
+  }
+  if (error instanceof SyncGenerationMismatchError) {
+    return context.json(
+      {
+        error: {
+          code: "sync_generation_mismatch",
+          message: error.message,
+          currentGeneration: error.currentGeneration,
+        },
+      },
+      409,
+    );
+  }
+  if (error instanceof SyncOperationConflictError) {
+    return context.json(
+      {
+        error: {
+          code: "sync_operation_conflict",
+          message: error.message,
+          operationId: error.operationId,
+        },
+      },
+      409,
+    );
+  }
+  if (error instanceof SyncOperationInvalidError) {
+    return context.json(
+      {
+        error: {
+          code: "sync_operation_invalid",
+          message: error.message,
+          operationId: error.operationId,
+        },
+      },
+      422,
+    );
+  }
   if (error instanceof SyncOperationTooLargeError) {
     return context.json(
       {
@@ -269,6 +419,11 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnvironment> {
     perClientPerMinute: config.recognition.rateLimitPerMinute,
     globalPerMinute: config.recognition.globalRateLimitPerMinute,
     maxConcurrent: config.recognition.maxConcurrentUploads,
+  });
+  const syncGuard = new CatalogueRequestGuard({
+    perClientPerMinute: SYNC_PER_SUBJECT_PER_MINUTE,
+    globalPerMinute: SYNC_GLOBAL_PER_MINUTE,
+    maxConcurrent: SYNC_MAX_CONCURRENT_REQUESTS,
   });
   const recognitionBodyLimit = bodyLimit({
     maxSize: config.recognition.maxImageBytes,
@@ -362,6 +517,22 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnvironment> {
   app.post(
     "/api/recognition/cards",
     async (context, next) => {
+      const deadline = new AbortController();
+      const timer = setTimeout(() => {
+        deadline.abort(new RecognitionTimeoutError());
+      }, RECOGNITION_E2E_TIMEOUT_MS);
+      (timer as NodeJS.Timeout).unref?.();
+      context.set(
+        "recognitionSignal",
+        AbortSignal.any([context.req.raw.signal, deadline.signal]),
+      );
+      try {
+        await next();
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    async (context, next) => {
       context.header("Cache-Control", "no-store");
       if (
         !config.recognition.enabled ||
@@ -382,7 +553,7 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnvironment> {
 
       const parsed = z
         .object({
-          language: z.enum(CARD_LANGUAGES),
+          language: catalogueLanguageMode.default("auto"),
         })
         .safeParse({
           language: context.req.query("language") ?? context.req.query("lang"),
@@ -470,16 +641,21 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnvironment> {
       context.get("recognitionUploadLease").release();
 
       try {
-        const recognition = await recognizer.recognize(image);
+        const signal = context.get("recognitionSignal");
+        const recognition = await recognizer.recognize(image, { signal });
         const cards = recognition.evidence.query
           ? (
-              await catalogue.search(
-                recognition.evidence.query,
-                context.get("recognitionLanguage"),
-                12,
-              )
+              await searchCatalogueLanguages({
+                catalogue,
+                query: recognition.evidence.query,
+                language: context.get("recognitionLanguage"),
+                perLanguageLimit: AUTO_LANGUAGE_PER_LANGUAGE_LIMIT,
+                maxCards: AUTO_LANGUAGE_CARD_LIMIT,
+                signal,
+              })
             ).cards
           : [];
+        throwIfAborted(signal);
         return context.json({ ...recognition, cards });
       } catch (error) {
         if (error instanceof RecognitionBusyError) {
@@ -553,7 +729,7 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnvironment> {
     const parsed = z
       .object({
         q: z.string().trim().min(1).max(120),
-        language: z.enum(CARD_LANGUAGES).default("en"),
+        language: catalogueLanguageMode.default("auto"),
         limit: z.coerce.number().int().min(1).max(50).default(20),
       })
       .safeParse({
@@ -566,11 +742,19 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnvironment> {
 
     try {
       return context.json(
-        await catalogue.search(
-          parsed.data.q,
-          parsed.data.language as CardLanguage,
-          parsed.data.limit,
-        ),
+        await searchCatalogueLanguages({
+          catalogue,
+          query: parsed.data.q,
+          language: parsed.data.language,
+          perLanguageLimit:
+            parsed.data.language === "auto"
+              ? Math.min(AUTO_LANGUAGE_PER_LANGUAGE_LIMIT, parsed.data.limit)
+              : parsed.data.limit,
+          maxCards:
+            parsed.data.language === "auto"
+              ? Math.min(AUTO_LANGUAGE_CARD_LIMIT, parsed.data.limit)
+              : parsed.data.limit,
+        }),
       );
     } catch (error) {
       if (error instanceof CatalogueUnavailableError) {
@@ -621,12 +805,54 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnvironment> {
     }
   });
 
+  app.use("/api/sync", async (context, next) => {
+    context.header("Cache-Control", "no-store");
+    await next();
+  });
   app.use("/api/sync", createAuthenticationMiddleware(authenticator));
+  app.use("/api/sync", async (context, next) => {
+    const lease = syncGuard.enter(context.get("principal").subject);
+    if (!lease.allowed) {
+      context.header("Retry-After", String(lease.retryAfterSeconds));
+      return context.json(
+        {
+          error: {
+            code: lease.reason === "rate" ? "sync_rate_limited" : "sync_busy",
+            message:
+              lease.reason === "rate"
+                ? "Cloud sync request rate exceeded"
+                : "Cloud sync is temporarily busy",
+          },
+        },
+        lease.reason === "rate" ? 429 : 503,
+      );
+    }
+    try {
+      await next();
+    } finally {
+      lease.release();
+    }
+  });
 
   app.get("/api/sync", (context) => {
     const parsed = z
-      .object({ cursor: z.string().regex(/^\d+$/).optional() })
-      .safeParse({ cursor: context.req.query("cursor") });
+      .object({
+        cursor: z.string().regex(/^\d+$/).optional(),
+        generation: syncGeneration.optional(),
+      })
+      .superRefine((value, context) => {
+        if (value.cursor !== undefined && value.generation === undefined) {
+          context.addIssue({
+            code: "custom",
+            path: ["generation"],
+            message: "A generation is required when a cursor is provided",
+          });
+        }
+      })
+      .safeParse({
+        cursor: context.req.query("cursor"),
+        generation: context.req.query("generation"),
+      });
     if (!parsed.success)
       return context.json(invalidRequest(parsed.error.issues), 400);
 
@@ -635,7 +861,11 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnvironment> {
       return context.json(
         store.sync(
           principal.subject,
-          { cursor: parsed.data.cursor, operations: [] },
+          {
+            cursor: parsed.data.cursor,
+            generation: parsed.data.generation ?? null,
+            operations: [],
+          },
           syncStoreOptions(config),
         ),
       );
@@ -663,9 +893,27 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnvironment> {
     const schema = z
       .object({
         cursor: z.string().regex(/^\d+$/).nullable().optional(),
-        operations: z.array(syncOperation).max(config.sync.maxBatchSize),
+        generation: syncGeneration.nullable(),
+        requireEmpty: z.boolean().optional(),
+        operations: z.array(syncOperationSchema).max(config.sync.maxBatchSize),
       })
-      .strict();
+      .strict()
+      .superRefine((value, context) => {
+        if (
+          value.generation === null &&
+          ((value.cursor !== undefined &&
+            value.cursor !== null &&
+            value.cursor !== "0") ||
+            value.operations.length > 0)
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["generation"],
+            message:
+              "A null generation is only valid for an empty bootstrap request",
+          });
+        }
+      });
     const parsed = schema.safeParse(body);
     if (!parsed.success)
       return context.json(invalidRequest(parsed.error.issues), 400);
@@ -686,13 +934,20 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnvironment> {
 
   app.delete("/api/sync", (context) => {
     const principal = context.get("principal");
-    const accountExisted = store.deleteAccount(principal.subject);
-    return context.json({
-      deleted: true,
-      accountExisted,
-      message:
-        "Cloud sync events were deleted from the active database. This does not guarantee erasure from filesystem snapshots or backups, which follow their own retention policies.",
-    });
+    try {
+      const deletion = store.deleteAccount(
+        principal.subject,
+        syncStoreOptions(config),
+      );
+      return context.json({
+        deleted: true,
+        ...deletion,
+        message:
+          "Cloud sync events were deleted from the active database. This does not guarantee erasure from filesystem snapshots or backups, which follow their own retention policies.",
+      });
+    } catch (error) {
+      return syncErrorResponse(context, error);
+    }
   });
 
   if (config.staticRoot && existsSync(config.staticRoot)) {

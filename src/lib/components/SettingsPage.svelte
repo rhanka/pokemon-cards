@@ -1,13 +1,9 @@
 <script lang="ts">
   /* global File, Event, HTMLInputElement, HTMLSelectElement, window */
-  import {
-    Button,
-    Card,
-    Tabs,
-    type TabItem,
-  } from "@sentropic/design-system-svelte";
+  import { Button, Card } from "@sentropic/design-system-svelte";
   import type { AuthState } from "../auth";
   import { translate } from "../i18n";
+  import type { SyncState } from "../sync-coordinator";
   import type {
     CollectionSnapshot,
     Locale,
@@ -24,7 +20,6 @@
     authState,
     syncState,
     valuationPreference,
-    onLocale,
     onValuationPreference,
     onExportJson,
     onExportCsv,
@@ -38,9 +33,8 @@
     snapshot: CollectionSnapshot;
     config: RuntimeConfig;
     authState: AuthState;
-    syncState: "idle" | "syncing" | "success" | "error";
+    syncState: SyncState;
     valuationPreference: ValuationPreference;
-    onLocale: (locale: Locale) => void;
     onValuationPreference: (preference: ValuationPreference) => void;
     onExportJson: () => Promise<void>;
     onExportCsv: () => Promise<void>;
@@ -55,18 +49,11 @@
   let importedCount = $state(0);
   let restoreMode = $state<RestoreMode>("merge");
   let deleteState = $state<"idle" | "deleting" | "success" | "error">("idle");
-  const languageTabs = $derived<TabItem[]>([
-    {
-      value: "en",
-      label: translate(locale, "settings.english"),
-      content: translate(locale, "settings.englishContent"),
-    },
-    {
-      value: "fr",
-      label: translate(locale, "settings.french"),
-      content: translate(locale, "settings.frenchContent"),
-    },
-  ]);
+  const signedIn = $derived(authState.status === "authenticated");
+
+  $effect(() => {
+    if (signedIn && restoreMode === "replace") restoreMode = "merge";
+  });
 
   async function importFile(event: Event): Promise<void> {
     const input = event.currentTarget as HTMLInputElement;
@@ -123,16 +110,6 @@
     <h1 id="settings-title">{translate(locale, "settings.title")}</h1>
   </header>
 
-  <section class="settings-group" aria-labelledby="language-title">
-    <h2 id="language-title">{translate(locale, "settings.language")}</h2>
-    <Tabs
-      items={languageTabs}
-      activeValue={locale}
-      label={translate(locale, "settings.language")}
-      onchange={(value) => onLocale(value as Locale)}
-    />
-  </section>
-
   <Card class="settings-group valuation-card" aria-labelledby="valuation-title">
     <div class="group-heading">
       <h2 id="valuation-title">{translate(locale, "settings.valuationTitle")}</h2>
@@ -159,14 +136,6 @@
       </label>
     </div>
     <p class="preference-note">{translate(locale, "settings.noConversion")}</p>
-  </Card>
-
-  <Card class="privacy-card">
-    <div class="icon-box"><Icon name="shield" /></div>
-    <div>
-      <h2>{translate(locale, "settings.localFirst")}</h2>
-      <p>{translate(locale, "settings.localDetail")}</p>
-    </div>
   </Card>
 
   <section class="settings-group" aria-labelledby="data-title">
@@ -202,12 +171,20 @@
             type="radio"
             name="restore-mode"
             value="replace"
+            disabled={signedIn}
             checked={restoreMode === "replace"}
             onchange={() => (restoreMode = "replace")}
           />
           <span>
             <strong>{translate(locale, "settings.restoreReplace")}</strong>
-            <small>{translate(locale, "settings.restoreReplaceHelp")}</small>
+            <small
+              >{translate(
+                locale,
+                signedIn
+                  ? "settings.restoreReplaceAccountHelp"
+                  : "settings.restoreReplaceHelp",
+              )}</small
+            >
           </span>
         </label>
       </div>
@@ -281,17 +258,36 @@
           >{translate(locale, "settings.signOut")}</button
         >
       </div>
-      <Button
-        class="full"
-        disabled={syncState === "syncing"}
-        onclick={() => void onSync()}
-        ><Icon name="cloud" />
-        {syncState === "syncing"
-          ? translate(locale, "common.loading")
-          : translate(locale, "settings.sync")}</Button
-      >
-      {#if syncState === "success"}<p class="status success" role="status">
+      <p class="account-cache-note">
+        {translate(locale, "settings.signOutHelp")}
+      </p>
+      {#if syncState === "error"}
+        <Button class="full" onclick={() => void onSync()}
+          ><Icon name="cloud" />
+          {translate(locale, "settings.retrySync")}</Button
+        >
+      {:else if syncState === "auth-required"}
+        <Button class="full" onclick={() => void onSignIn()}
+          >{translate(locale, "settings.signInAgain")}</Button
+        >
+      {/if}
+      {#if syncState === "synced"}<p class="status success" role="status">
           {translate(locale, "settings.synced")}
+        </p>{/if}
+      {#if syncState === "idle"}<p class="status" role="status">
+          {translate(locale, "settings.syncPreparing")}
+        </p>{/if}
+      {#if syncState === "pending"}<p class="status" role="status">
+          {translate(locale, "settings.syncPending")}
+        </p>{/if}
+      {#if syncState === "syncing"}<p class="status" role="status">
+          {translate(locale, "settings.syncing")}
+        </p>{/if}
+      {#if syncState === "offline"}<p class="status" role="status">
+          {translate(locale, "settings.syncOffline")}
+        </p>{/if}
+      {#if syncState === "auth-required"}<p class="status error" role="alert">
+          {translate(locale, "settings.syncAuthRequired")}
         </p>{/if}
       {#if syncState === "error"}<p class="status error" role="alert">
           {translate(locale, "settings.syncError")}
@@ -397,7 +393,6 @@
     font-size: 0.64rem;
     line-height: 1.45;
   }
-  .settings-group > h2,
   .group-heading h2,
   .cloud-heading h2 {
     margin: 0 0 0.55rem;
@@ -409,29 +404,11 @@
     color: var(--muted);
     font-size: 0.7rem;
   }
-  :global(.privacy-card),
   .cloud-heading {
     display: grid;
     grid-template-columns: auto 1fr;
     gap: 0.75rem;
     align-items: flex-start;
-  }
-  :global(.privacy-card) {
-    margin-bottom: 1.3rem;
-    padding: 0.9rem;
-    border-color: color-mix(in srgb, var(--success) 25%, var(--line));
-    border-radius: 1rem;
-    background: var(--success-soft);
-  }
-  :global(.privacy-card) h2 {
-    margin: 0 0 0.25rem;
-    font: 700 0.88rem/1.2 var(--font-display);
-  }
-  :global(.privacy-card) p {
-    margin: 0;
-    color: var(--muted);
-    font-size: 0.7rem;
-    line-height: 1.45;
   }
   .icon-box {
     display: grid;
@@ -440,7 +417,7 @@
     aspect-ratio: 1;
     color: var(--success);
     border-radius: 0.75rem;
-    background: rgba(255, 255, 255, 0.8);
+    background: var(--surface);
   }
   .icon-box.cloud {
     color: var(--primary);
@@ -601,6 +578,12 @@
     border: 0;
     background: transparent;
     font-weight: 700;
+  }
+  .account-cache-note {
+    margin: 0 0 0.65rem;
+    color: var(--muted);
+    font-size: 0.63rem;
+    line-height: 1.45;
   }
   .disabled-message {
     padding: 0.75rem;

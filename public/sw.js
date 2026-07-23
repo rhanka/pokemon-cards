@@ -1,6 +1,6 @@
 /* global self, caches, URL, fetch */
 
-const CACHE = "cardscope-shell-v3";
+const CACHE = "cardscope-shell-v4";
 const STATIC_SHELL = ["/manifest.webmanifest", "/icon.svg"];
 const AUTH_QUERY_PARAMETERS = new Set([
   "code",

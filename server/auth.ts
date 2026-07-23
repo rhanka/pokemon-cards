@@ -44,6 +44,8 @@ export class DisabledAuthenticator implements Authenticator {
 export class OidcAuthenticator implements Authenticator {
   private readonly issuer: string;
   private readonly audience: string;
+  private readonly clientId: string;
+  private readonly requiredScopes: readonly string[];
   private readonly fetchImpl: typeof fetch;
   private jwks: ReturnType<typeof createRemoteJWKSet> | null;
   private jwksPromise: Promise<ReturnType<typeof createRemoteJWKSet>> | null =
@@ -52,11 +54,15 @@ export class OidcAuthenticator implements Authenticator {
   constructor(options: {
     issuer: string;
     audience: string;
+    clientId: string;
+    requiredScopes?: readonly string[];
     jwksUri?: string | null;
     fetch?: typeof fetch;
   }) {
     this.issuer = normalizedOidcUrl(options.issuer, "OIDC issuer");
     this.audience = options.audience;
+    this.clientId = options.clientId;
+    this.requiredScopes = options.requiredScopes ?? ["openid"];
     this.fetchImpl = options.fetch ?? fetch;
     if (options.jwksUri) {
       const jwksUri = normalizedOidcUrl(options.jwksUri, "OIDC JWKS URI");
@@ -142,11 +148,21 @@ export class OidcAuthenticator implements Authenticator {
       const verified = await jwtVerify(match[1], await this.discoverJwks(), {
         issuer: this.issuer,
         audience: this.audience,
+        requiredClaims: ["sub", "exp", "iat", "client_id", "scope"],
       });
       if (!verified.payload.sub) throw new AuthenticationError();
+      if (verified.payload.client_id !== this.clientId)
+        throw new AuthenticationError();
+      const scopes =
+        typeof verified.payload.scope === "string"
+          ? new Set(verified.payload.scope.split(/\s+/).filter(Boolean))
+          : new Set<string>();
+      if (this.requiredScopes.some((scope) => !scopes.has(scope)))
+        throw new AuthenticationError();
 
       return {
-        subject: verified.payload.sub,
+        // OIDC `sub` is stable only inside its issuer namespace.
+        subject: `${this.issuer}|${verified.payload.sub}`,
         email:
           typeof verified.payload.email === "string"
             ? verified.payload.email
@@ -173,6 +189,8 @@ export function createAuthenticator(config: RuntimeConfig): Authenticator {
   return new OidcAuthenticator({
     issuer: config.oidc.issuer,
     audience: config.oidc.audience,
+    clientId: config.oidc.clientId,
+    requiredScopes: ["openid"],
     jwksUri: config.oidc.jwksUri,
   });
 }

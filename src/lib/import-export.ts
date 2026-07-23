@@ -26,9 +26,8 @@ export function eventsToJson(events: CollectionEvent[]): string {
     format: "cardscope-collection",
     version: 1,
     exportedAt: new Date().toISOString(),
-    // Synchronisation acknowledgements are device/account state, not user data.
-    // Omitting them makes every restored backup explicitly eligible for a later,
-    // user-triggered cloud reseed.
+    // Synchronisation acknowledgements and server ordering are epoch-bound
+    // account state, not portable user data.
     events: events.map(withoutSyncAcknowledgement),
   };
   return JSON.stringify(envelope, null, 2);
@@ -60,6 +59,7 @@ export function eventsFromJson(text: string): CollectionEvent[] {
 function withoutSyncAcknowledgement(event: CollectionEvent): CollectionEvent {
   const copy = structuredClone(event);
   delete copy.syncedAt;
+  delete copy.serverSequence;
   return copy;
 }
 

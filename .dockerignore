@@ -22,6 +22,9 @@ test-results
 *.tgz
 /.h2a-schema.json
 /.h2a
+/.agents
+/.codex
+/.remote
 /artifacts
 /contracts
 /engagements

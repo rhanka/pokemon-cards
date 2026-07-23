@@ -22,7 +22,8 @@ The first useful version deliberately uses the smallest legally defensible path:
 1. a guided crop in the browser, so the MVP needs no object detector;
 2. mandatory JPEG re-encoding in the browser to bound pixels and remove EXIF;
 3. one English/French Tesseract.js worker in Node for collector number and name fragments;
-4. catalogue lookup over authorised TCGdex metadata, followed by abstention and human confirmation.
+4. bounded English and French catalogue lookups in parallel over authorised
+   TCGdex metadata, followed by abstention and human confirmation.
 
 The final Alpine image completed the real 600×825 Pikachu scan in 10.26 s cold
 and 5.23 s warm at a 300m CPU limit. Cgroup counters measured 3.22 CPU-s for
@@ -59,4 +60,7 @@ The model remains optional until a named benchmark proves:
 - fewer than 5% identity corrections and an independently measured latency target on the release hardware;
 - model at most 5 MiB and higher confirmed-card throughput than the OCR baseline.
 
-Until then, the shipped path is honest: server OCR + catalogue search + a top-candidate screen. The user confirms printing, language, finish, and condition; CardScope never claims authentication or automated grading.
+Until then, the shipped path is honest: server OCR, automatic English/French
+catalogue search, and a top-candidate screen. The chosen candidate supplies the
+printed language; the user resolves an ambiguous printing and supplies finish
+and condition. CardScope never claims authentication or automated grading.

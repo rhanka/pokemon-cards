@@ -5,6 +5,15 @@ const en = {
   "app.tagline": "Know every card. Keep every cent.",
   "app.valuationPending":
     "Identification is live. Market values remain unavailable until commercial quote-feed rights are confirmed.",
+  "app.enrollmentChecking": "Preparing your account collection…",
+  "app.enrollmentTitle": "Add this device’s cards to your account?",
+  "app.enrollmentHelp":
+    "This browser has {anonymous} offline events and your account already has {account}. Nothing will move until you confirm.",
+  "app.enrollmentConfirm": "Add them to my account",
+  "app.enrollmentSeparate": "Keep them separate",
+  "app.enrollmentMoving": "Adding cards to your account…",
+  "app.enrollmentError":
+    "The cards were not moved. Try again; both collections remain intact.",
   "nav.scanner": "Scanner",
   "nav.collection": "Collection",
   "nav.insights": "Insights",
@@ -15,8 +24,9 @@ const en = {
   "common.close": "Close",
   "common.loading": "Loading…",
   "common.unavailable": "Unavailable",
-  "common.offline": "Offline — your collection is still available",
-  "scanner.eyebrow": "Private transient scan",
+  "common.offline":
+    "Offline — your collection remains available and changes will sync automatically",
+  "scanner.eyebrow": "Automatic card recognition",
   "scanner.title": "Frame one Pokémon card",
   "scanner.help":
     "Fill the guide, avoid glare, and keep the collector number visible.",
@@ -24,8 +34,6 @@ const en = {
   "scanner.photo": "Choose photo",
   "scanner.capture": "Capture card",
   "scanner.stop": "Close camera",
-  "scanner.privacy":
-    "Your cropped photo is encrypted in transit, processed in memory, and never stored or used for training. Only the extracted name and number are sent to TCGdex for candidates.",
   "scanner.processing": "Reading the card securely",
   "scanner.searching": "Searching the catalogue",
   "scanner.model": "Checking server recognition",
@@ -48,17 +56,11 @@ const en = {
   "scanner.notCorrect": "Scan another card",
   "scanner.finish": "Finish",
   "scanner.condition": "Condition",
-  "scanner.cardLanguage": "Card language",
-  "scanner.cardLanguageHelp":
-    "Choose the language printed on the card. This is separate from the app language.",
-  "scanner.languageRequired":
-    "Choose the card language before scanning or searching.",
-  "scanner.requiredChoices":
-    "Choose the card language, finish, and condition before adding.",
+  "scanner.requiredChoices": "Choose the finish and condition before adding.",
   "scanner.cost": "What did you pay? (optional)",
   "scanner.costCurrency": "Purchase currency",
   "scanner.add": "Add to collection",
-  "scanner.added": "Card added. Duplicate copies are grouped automatically.",
+  "scanner.added": "Card added to your collection.",
   "scanner.manual": "Search by name or collector number",
   "scanner.search": "Search",
   "scanner.visualSkipped":
@@ -84,6 +86,14 @@ const en = {
   "collection.decrease": "Remove one copy",
   "collection.increase": "Add one copy",
   "collection.remove": "Remove holding",
+  "collection.edit": "Edit",
+  "collection.closeEdit": "Close",
+  "collection.editCard": "Edit {card}",
+  "collection.closeEditCard": "Close editor for {card}",
+  "collection.pagination": "Collection pages",
+  "collection.previous": "Previous",
+  "collection.next": "Next",
+  "collection.pageStatus": "{start}–{end} of {total}",
   "collection.history": "Recent activity",
   "insights.title": "Collection insights",
   "insights.eyebrow": "ROI dashboard",
@@ -117,13 +127,10 @@ const en = {
   "settings.noConversion":
     "CardScope selects an available quote in this order; it does not perform hidden currency conversion.",
   "settings.dataTitle": "Your data",
-  "settings.localEvents": "{count} local events",
+  "settings.localEvents": "{count} events in this device’s offline cache",
   "settings.restorable": "restorable",
   "settings.signedInAccount": "Signed-in account",
   "settings.noAds": "No ads · No data resale",
-  "settings.localFirst": "Local-first by design",
-  "settings.localDetail":
-    "Collection events stay on this device by default. Scan photos are processed transiently by the server and never saved.",
   "settings.exportJson": "Backup as JSON",
   "settings.exportCsv": "Export spreadsheet CSV",
   "settings.importJson": "Restore JSON backup",
@@ -138,27 +145,41 @@ const en = {
     "Keep current events and add new events from the backup.",
   "settings.restoreReplace": "Replace active collection",
   "settings.restoreReplaceHelp":
-    "Erase only the current anonymous or signed-in collection, then restore this backup.",
+    "Erase the anonymous collection on this browser, then restore this backup.",
+  "settings.restoreReplaceAccountHelp":
+    "Signed-in collections are synchronized centrally. Merge this backup to avoid deleting data on another device.",
   "settings.replaceWarning":
     "Replacement erases the active collection on this device. Other account domains are preserved.",
   "settings.replaceConfirm":
     "This will erase the active collection on this device and replace it with the selected JSON backup. Other account domains are preserved. Continue?",
-  "settings.account": "Optional cloud sync",
+  "settings.account": "Your CardScope account",
   "settings.accountHelp":
-    "A free local collection works without an account. Sync is shown only on deployments whose identity and backup gates are enabled.",
-  "settings.signIn": "Sign in",
-  "settings.signOut": "Sign out",
+    "Your account is the durable collection source. This browser keeps an offline cache and sends queued changes automatically.",
+  "settings.signIn": "Create account / Sign in",
+  "settings.signInAgain": "Sign in again",
+  "settings.signOut": "Sign out on this device",
+  "settings.signOutHelp":
+    "The offline cache stays on this browser so queued changes are not lost. It is hidden after sign-out and restored only when the same account signs in again.",
   "settings.authDisabled":
-    "Cloud sync and server backup are not enabled on this deployment.",
+    "Account enrollment is not enabled on this deployment yet. Cards you add remain in this device’s offline cache.",
   "settings.sync": "Sync now",
-  "settings.synced": "Sync complete — the active server copy was updated",
-  "settings.syncError": "Sync is unavailable. Your local data is safe.",
-  "settings.deleteCloud": "Delete active server copy",
+  "settings.retrySync": "Retry saving",
+  "settings.syncPreparing": "Preparing the offline cache for this account.",
+  "settings.syncPending": "Changes are queued and will be saved automatically.",
+  "settings.syncing": "Saving changes to your account…",
+  "settings.synced": "All changes are saved to your account.",
+  "settings.syncOffline":
+    "Offline cache active. Queued changes will be saved when the connection returns.",
+  "settings.syncAuthRequired": "Sign in again to resume automatic saving.",
+  "settings.syncError":
+    "CardScope could not reach your account. Changes remain queued on this device.",
+  "settings.deleteCloud": "Delete account collection",
   "settings.deleteCloudConfirm":
-    "Delete the active server copy? Your local collection remains. Retained snapshots or backups follow the deployment’s published erasure policy.",
-  "settings.deletedCloud": "Active server copy deleted. Local data was kept.",
+    "Delete this collection from your account and this device? Other devices will receive the empty account state. Retained backups follow the published erasure policy.",
+  "settings.deletedCloud":
+    "The collection was deleted from your account and this device.",
   "settings.retention":
-    "When enabled, active cloud events are retained for up to {years} years.",
+    "Account collection history is retained for up to {years} years.",
   "price.noPrice": "Price unavailable",
   "price.today": "today",
   "price.days": "{count}d ago",
@@ -189,6 +210,15 @@ const fr: Record<TranslationKey, string> = {
   "app.tagline": "Connaissez chaque carte. Gardez chaque sou.",
   "app.valuationPending":
     "L’identification est active. Les valeurs de marché restent indisponibles tant que les droits commerciaux du flux de prix ne sont pas confirmés.",
+  "app.enrollmentChecking": "Préparation de votre collection de compte…",
+  "app.enrollmentTitle": "Ajouter les cartes de cet appareil au compte ?",
+  "app.enrollmentHelp":
+    "Ce navigateur contient {anonymous} événements hors ligne et votre compte en contient déjà {account}. Rien ne sera déplacé sans votre confirmation.",
+  "app.enrollmentConfirm": "Les ajouter à mon compte",
+  "app.enrollmentSeparate": "Les garder séparées",
+  "app.enrollmentMoving": "Ajout des cartes à votre compte…",
+  "app.enrollmentError":
+    "Les cartes n’ont pas été déplacées. Réessayez : les deux collections sont intactes.",
   "nav.scanner": "Scanner",
   "nav.collection": "Collection",
   "nav.insights": "Valeur",
@@ -199,8 +229,9 @@ const fr: Record<TranslationKey, string> = {
   "common.close": "Fermer",
   "common.loading": "Chargement…",
   "common.unavailable": "Indisponible",
-  "common.offline": "Hors ligne — votre collection reste disponible",
-  "scanner.eyebrow": "Scan privé et transitoire",
+  "common.offline":
+    "Hors ligne — votre collection reste disponible et les changements se synchroniseront automatiquement",
+  "scanner.eyebrow": "Reconnaissance automatique des cartes",
   "scanner.title": "Cadrez une carte Pokémon",
   "scanner.help":
     "Remplissez le cadre, évitez les reflets et gardez le numéro visible.",
@@ -208,8 +239,6 @@ const fr: Record<TranslationKey, string> = {
   "scanner.photo": "Choisir une photo",
   "scanner.capture": "Photographier la carte",
   "scanner.stop": "Fermer la caméra",
-  "scanner.privacy":
-    "La photo recadrée est chiffrée en transit, traitée en mémoire et n’est ni conservée ni utilisée pour entraîner un modèle. Seuls le nom et le numéro extraits sont envoyés à TCGdex pour trouver les candidats.",
   "scanner.processing": "Lecture sécurisée de la carte",
   "scanner.searching": "Recherche dans le catalogue",
   "scanner.model": "Vérification par le service de reconnaissance",
@@ -232,17 +261,11 @@ const fr: Record<TranslationKey, string> = {
   "scanner.notCorrect": "Scanner une autre carte",
   "scanner.finish": "Finition",
   "scanner.condition": "État",
-  "scanner.cardLanguage": "Langue de la carte",
-  "scanner.cardLanguageHelp":
-    "Choisissez la langue imprimée sur la carte, indépendamment de celle de l’application.",
-  "scanner.languageRequired":
-    "Choisissez la langue de la carte avant de scanner ou chercher.",
-  "scanner.requiredChoices":
-    "Choisissez la langue de la carte, la finition et l’état avant l’ajout.",
+  "scanner.requiredChoices": "Choisissez la finition et l’état avant l’ajout.",
   "scanner.cost": "Prix payé ? (facultatif)",
   "scanner.costCurrency": "Devise d’achat",
   "scanner.add": "Ajouter à la collection",
-  "scanner.added": "Carte ajoutée. Les doubles sont regroupés automatiquement.",
+  "scanner.added": "Carte ajoutée à votre collection.",
   "scanner.manual": "Chercher par nom ou numéro",
   "scanner.search": "Chercher",
   "scanner.visualSkipped":
@@ -268,6 +291,14 @@ const fr: Record<TranslationKey, string> = {
   "collection.decrease": "Retirer un exemplaire",
   "collection.increase": "Ajouter un exemplaire",
   "collection.remove": "Retirer la carte",
+  "collection.edit": "Modifier",
+  "collection.closeEdit": "Fermer",
+  "collection.editCard": "Modifier {card}",
+  "collection.closeEditCard": "Fermer l’éditeur de {card}",
+  "collection.pagination": "Pages de la collection",
+  "collection.previous": "Précédent",
+  "collection.next": "Suivant",
+  "collection.pageStatus": "{start}–{end} sur {total}",
   "collection.history": "Activité récente",
   "insights.title": "Analyse de la collection",
   "insights.eyebrow": "Tableau de bord ROI",
@@ -302,13 +333,11 @@ const fr: Record<TranslationKey, string> = {
   "settings.noConversion":
     "CardScope choisit une cote disponible dans cet ordre ; aucune conversion de devise cachée n’est effectuée.",
   "settings.dataTitle": "Vos données",
-  "settings.localEvents": "{count} événements locaux",
+  "settings.localEvents":
+    "{count} événements dans le cache hors ligne de cet appareil",
   "settings.restorable": "restaurable",
   "settings.signedInAccount": "Compte connecté",
   "settings.noAds": "Sans publicité · Sans revente de données",
-  "settings.localFirst": "Local par conception",
-  "settings.localDetail":
-    "Les événements de collection restent par défaut sur cet appareil. Les photos de scan sont traitées transitoirement par le serveur et ne sont jamais enregistrées.",
   "settings.exportJson": "Sauvegarde JSON",
   "settings.exportCsv": "Exporter en CSV",
   "settings.importJson": "Restaurer une sauvegarde JSON",
@@ -323,30 +352,43 @@ const fr: Record<TranslationKey, string> = {
     "Conserver les événements actuels et ajouter ceux de la sauvegarde.",
   "settings.restoreReplace": "Remplacer la collection active",
   "settings.restoreReplaceHelp":
-    "Effacer uniquement la collection anonyme ou connectée actuelle, puis restaurer cette sauvegarde.",
+    "Effacer la collection anonyme de ce navigateur, puis restaurer cette sauvegarde.",
+  "settings.restoreReplaceAccountHelp":
+    "Les collections connectées sont synchronisées au centre. Fusionnez cette sauvegarde pour éviter d’effacer les données d’un autre appareil.",
   "settings.replaceWarning":
     "Le remplacement efface la collection active sur cet appareil. Les autres domaines de compte sont conservés.",
   "settings.replaceConfirm":
     "Cette opération efface la collection active sur cet appareil et la remplace par la sauvegarde JSON sélectionnée. Les autres domaines de compte sont conservés. Continuer ?",
-  "settings.account": "Synchronisation cloud facultative",
+  "settings.account": "Votre compte CardScope",
   "settings.accountHelp":
-    "La collection locale gratuite fonctionne sans compte. La synchronisation n’apparaît que si les gates d’identité et de sauvegarde sont activés.",
-  "settings.signIn": "Se connecter",
-  "settings.signOut": "Se déconnecter",
+    "Votre compte est la source durable de la collection. Ce navigateur garde un cache hors ligne et envoie automatiquement les changements en attente.",
+  "settings.signIn": "Créer un compte / Se connecter",
+  "settings.signInAgain": "Se reconnecter",
+  "settings.signOut": "Quitter ce compte sur cet appareil",
+  "settings.signOutHelp":
+    "Le cache hors ligne reste dans ce navigateur pour ne pas perdre les changements en attente. Il est masqué après la déconnexion et restauré uniquement lorsque le même compte se reconnecte.",
   "settings.authDisabled":
-    "La synchronisation cloud et la sauvegarde serveur ne sont pas activées sur ce déploiement.",
+    "L’enrôlement des comptes n’est pas encore activé sur ce déploiement. Les cartes ajoutées restent dans le cache hors ligne de cet appareil.",
   "settings.sync": "Synchroniser",
-  "settings.synced":
-    "Synchronisation terminée — la copie serveur active est à jour",
+  "settings.retrySync": "Réessayer l’enregistrement",
+  "settings.syncPreparing": "Préparation du cache hors ligne pour ce compte.",
+  "settings.syncPending":
+    "Les changements sont en attente et seront enregistrés automatiquement.",
+  "settings.syncing": "Enregistrement des changements sur votre compte…",
+  "settings.synced": "Tous les changements sont enregistrés sur votre compte.",
+  "settings.syncOffline":
+    "Cache hors ligne actif. Les changements seront enregistrés au retour de la connexion.",
+  "settings.syncAuthRequired":
+    "Reconnectez-vous pour reprendre l’enregistrement automatique.",
   "settings.syncError":
-    "Synchronisation indisponible. Vos données locales sont intactes.",
-  "settings.deleteCloud": "Supprimer la copie serveur active",
+    "CardScope ne peut pas joindre votre compte. Les changements restent en attente sur cet appareil.",
+  "settings.deleteCloud": "Supprimer la collection du compte",
   "settings.deleteCloudConfirm":
-    "Supprimer la copie serveur active ? Votre collection locale reste disponible. Les snapshots ou sauvegardes suivent la politique d’effacement publiée du déploiement.",
+    "Supprimer cette collection du compte et de cet appareil ? Les autres appareils recevront l’état vide du compte. Les sauvegardes conservées suivent la politique d’effacement publiée.",
   "settings.deletedCloud":
-    "Copie serveur active supprimée. Les données locales sont conservées.",
+    "La collection a été supprimée du compte et de cet appareil.",
   "settings.retention":
-    "Une fois activés, les événements cloud sont conservés jusqu’à {years} ans.",
+    "L’historique de la collection du compte est conservé jusqu’à {years} ans.",
   "price.noPrice": "Prix indisponible",
   "price.today": "aujourd’hui",
   "price.days": "il y a {count} j",

@@ -65,8 +65,16 @@ interface SyncEventRow {
   received_at: string;
 }
 
-interface RetentionRow {
+interface SyncAccountRow {
+  generation: number;
   retention_until: string;
+}
+
+interface SyncHoldingStateRow {
+  operation_type: SyncOperation["type"];
+  holding_id: string;
+  operation_json: string;
+  storage_version: number;
 }
 
 interface ExpiredAccountRow {
@@ -104,12 +112,18 @@ export interface CatalogueCachePruneResult {
 
 export interface SyncStoreOptions {
   retentionDays: number;
+  maxAccounts?: number;
   eventLimit?: number;
   maxOperationBytes?: number;
   maxAccountEvents?: number;
   maxAccountBytes?: number;
   maxPullBytes?: number;
   now?: Date;
+}
+
+export interface SyncAccountDeletion {
+  accountExisted: boolean;
+  generation: string;
 }
 
 export class SyncOperationTooLargeError extends Error {
@@ -126,22 +140,59 @@ export class SyncOperationTooLargeError extends Error {
 }
 
 export class SyncStorageLimitError extends Error {
-  constructor(readonly limit: "events" | "bytes") {
+  constructor(readonly limit: "accounts" | "events" | "bytes") {
     super(
-      limit === "events"
-        ? "Cloud sync event limit reached for this account"
-        : "Cloud sync storage limit reached for this account",
+      limit === "accounts"
+        ? "Cloud sync account capacity reached"
+        : limit === "events"
+          ? "Cloud sync event limit reached for this account"
+          : "Cloud sync storage limit reached for this account",
     );
     this.name = "SyncStorageLimitError";
+  }
+}
+
+export class SyncGenerationMismatchError extends Error {
+  constructor(readonly currentGeneration: string) {
+    super(`Sync generation ${currentGeneration} is required for this account`);
+    this.name = "SyncGenerationMismatchError";
+  }
+}
+
+export class SyncOperationConflictError extends Error {
+  constructor(readonly operationId: string) {
+    super(
+      `Sync operation ${operationId} conflicts with the operation already stored under that identifier`,
+    );
+    this.name = "SyncOperationConflictError";
+  }
+}
+
+export class SyncEnrollmentConflictError extends Error {
+  constructor(readonly currentEventCount: number) {
+    super("Cloud enrollment requires an empty remote collection");
+    this.name = "SyncEnrollmentConflictError";
+  }
+}
+
+export class SyncOperationInvalidError extends Error {
+  constructor(
+    readonly operationId: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "SyncOperationInvalidError";
   }
 }
 
 const DEFAULT_CACHE_MAX_ENTRIES = 20_000;
 const DEFAULT_CACHE_MAX_BYTES = 256 * 1024 * 1024;
 const DEFAULT_MAX_OPERATION_BYTES = 64 * 1024;
+const DEFAULT_MAX_ACCOUNTS = 1_200;
 const DEFAULT_MAX_ACCOUNT_EVENTS = 10_000;
-const DEFAULT_MAX_ACCOUNT_BYTES = 64 * 1024 * 1024;
+const DEFAULT_MAX_ACCOUNT_BYTES = 2_621_440;
 const DEFAULT_MAX_PULL_BYTES = 1024 * 1024;
+const MAX_HOLDING_QUANTITY = 100_000;
 const SYNC_ROW_OVERHEAD_BYTES = 96;
 const SYNC_SHARED_OBJECT_ROW_OVERHEAD_BYTES = 96;
 const CATALOGUE_CACHE_ROW_OVERHEAD_BYTES = 64;
@@ -163,6 +214,23 @@ function parseCursor(cursor: string | null | undefined): number {
   return parsed;
 }
 
+function parseGeneration(generation: string | null | undefined): number | null {
+  if (generation === undefined || generation === null) return null;
+  if (!/^[1-9]\d*$/.test(generation))
+    throw new Error("Sync generation must be a positive integer string");
+
+  const parsed = Number(generation);
+  if (!Number.isSafeInteger(parsed))
+    throw new Error("Sync generation is outside the supported range");
+  return parsed;
+}
+
+function storedGeneration(generation: number): number {
+  if (!Number.isSafeInteger(generation) || generation < 1)
+    throw new Error("Stored sync generation is invalid");
+  return generation;
+}
+
 function canonicalValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalValue);
   if (!value || typeof value !== "object") return value;
@@ -176,6 +244,15 @@ function canonicalValue(value: unknown): unknown {
 
 function canonicalJson(value: unknown): string {
   return JSON.stringify(canonicalValue(value)) ?? "null";
+}
+
+function canonicalSyncOperation(operation: SyncOperation): string {
+  // `syncedAt` is local transport metadata added after an acknowledgement. It
+  // is deliberately excluded from the immutable operation identity so a
+  // normal retry after a lost response remains idempotent.
+  const identity: Partial<SyncOperation> = { ...operation };
+  delete identity.syncedAt;
+  return canonicalJson(identity);
 }
 
 function utf8Bytes(value: string | undefined): number {
@@ -209,6 +286,28 @@ function storedSyncSharedObjectBytes(
     utf8Bytes(contentHash) +
     utf8Bytes(payloadJson)
   );
+}
+
+function syncOperationFromRow(row: SyncEventRow): SyncOperation {
+  return row.storage_version === SYNC_STORAGE_VERSION
+    ? rehydrateSyncOperation(
+        {
+          id: row.operation_id,
+          type: row.operation_type,
+          holdingId: row.holding_id,
+          deviceId: row.device_id ?? "",
+          occurredAt: row.occurred_at,
+          ...(row.client_synced_at ? { syncedAt: row.client_synced_at } : {}),
+        },
+        JSON.parse(row.operation_json) as JsonObject,
+        row.card_snapshot_json
+          ? (JSON.parse(row.card_snapshot_json) as JsonObject)
+          : null,
+        row.quote_snapshot_json
+          ? (JSON.parse(row.quote_snapshot_json) as JsonObject)
+          : null,
+      )
+    : (JSON.parse(row.operation_json) as SyncOperation);
 }
 
 function syncSharedObjectBytesSql(alias: string): string {
@@ -296,7 +395,13 @@ export class SqliteStore {
       CREATE TABLE IF NOT EXISTS sync_accounts (
         user_id TEXT PRIMARY KEY,
         retention_until TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        generation INTEGER NOT NULL DEFAULT 1
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS sync_metadata (
+        metadata_key TEXT PRIMARY KEY,
+        integer_value INTEGER NOT NULL CHECK (integer_value >= 0)
       ) STRICT;
 
       CREATE TABLE IF NOT EXISTS sync_shared_objects (
@@ -337,6 +442,8 @@ export class SqliteStore {
         ON sync_events (user_id, sequence);
     `);
 
+    this.migrateSyncAccountColumns();
+    this.migrateSyncGenerationCounter();
     this.migrateSyncEventColumns();
     this.database.exec(`
       CREATE INDEX IF NOT EXISTS sync_events_card_snapshot_idx
@@ -347,6 +454,76 @@ export class SqliteStore {
         ON sync_events (storage_version, sequence);
     `);
     this.migrateLegacySyncEvents(1_000);
+  }
+
+  private migrateSyncAccountColumns(): void {
+    const columns = new Set(
+      (
+        this.database.prepare("PRAGMA table_info(sync_accounts)").all() as
+          SyncTableInfoRow[] | []
+      ).map((column) => column.name),
+    );
+    if (!columns.has("generation")) {
+      this.database.exec(
+        "ALTER TABLE sync_accounts ADD COLUMN generation INTEGER NOT NULL DEFAULT 1",
+      );
+    }
+  }
+
+  private migrateSyncGenerationCounter(): void {
+    this.database
+      .prepare(
+        `INSERT INTO sync_metadata (metadata_key, integer_value)
+         SELECT 'last_generation', COALESCE(MAX(generation), 0)
+         FROM sync_accounts
+         WHERE true
+         ON CONFLICT (metadata_key) DO UPDATE SET
+           integer_value = MAX(
+             sync_metadata.integer_value,
+             excluded.integer_value
+           )`,
+      )
+      .run();
+  }
+
+  /**
+   * Allocates an epoch that cannot collide with an epoch used by any account
+   * in this database. The caller must hold a write transaction.
+   */
+  private allocateSyncGeneration(): number {
+    const row = this.database
+      .prepare(
+        `SELECT MAX(
+           COALESCE(
+             (
+               SELECT integer_value
+               FROM sync_metadata
+               WHERE metadata_key = 'last_generation'
+             ),
+             0
+           ),
+           COALESCE((SELECT MAX(generation) FROM sync_accounts), 0)
+         ) AS integer_value`,
+      )
+      .get() as { integer_value?: number } | undefined;
+    const lastGeneration = Number(row?.integer_value ?? 0);
+    const nextGeneration = lastGeneration + 1;
+    if (
+      !Number.isSafeInteger(nextGeneration) ||
+      nextGeneration < 1 ||
+      nextGeneration > Number.MAX_SAFE_INTEGER
+    ) {
+      throw new Error("Sync generation cannot be incremented safely");
+    }
+    this.database
+      .prepare(
+        `INSERT INTO sync_metadata (metadata_key, integer_value)
+         VALUES ('last_generation', ?)
+         ON CONFLICT (metadata_key) DO UPDATE SET
+           integer_value = excluded.integer_value`,
+      )
+      .run(nextGeneration);
+    return nextGeneration;
   }
 
   private migrateSyncEventColumns(): void {
@@ -506,6 +683,175 @@ export class SqliteStore {
     return new Map(
       rows.map((row) => [Number(row.object_id), Number(row.stored_bytes)]),
     );
+  }
+
+  private storedSyncOperation(
+    userId: string,
+    operationId: string,
+  ): SyncOperation | null {
+    const row = this.database
+      .prepare(
+        `SELECT event.sequence,
+                event.operation_id,
+                event.operation_type,
+                event.holding_id,
+                event.device_id,
+                event.client_synced_at,
+                event.operation_json,
+                event.storage_version,
+                event.occurred_at,
+                event.received_at,
+                card.payload_json AS card_snapshot_json,
+                quote.payload_json AS quote_snapshot_json
+         FROM sync_events AS event
+         LEFT JOIN sync_shared_objects AS card
+           ON card.object_id = event.card_snapshot_id
+         LEFT JOIN sync_shared_objects AS quote
+           ON quote.object_id = event.quote_snapshot_id
+         WHERE event.user_id = ? AND event.operation_id = ?`,
+      )
+      .get(userId, operationId) as unknown as SyncEventRow | undefined;
+    return row ? syncOperationFromRow(row) : null;
+  }
+
+  private validateSyncOperationSemantics(
+    userId: string,
+    operations: readonly SyncOperation[],
+  ): void {
+    if (operations.length === 0) return;
+
+    const holdingIds = [
+      ...new Set(operations.map((operation) => operation.holdingId)),
+    ];
+    const placeholders = holdingIds.map(() => "?").join(", ");
+    const rows = this.database
+      .prepare(
+        `SELECT operation_type, holding_id, operation_json, storage_version
+         FROM sync_events
+         WHERE user_id = ? AND holding_id IN (${placeholders})
+         ORDER BY sequence ASC`,
+      )
+      .all(userId, ...holdingIds) as unknown as SyncHoldingStateRow[];
+    const quantities = new Map<string, number>();
+    const usedHoldingIds = new Set<string>();
+
+    const applyStored = (row: SyncHoldingStateRow): void => {
+      const decoded = JSON.parse(row.operation_json) as JsonObject;
+      const payload =
+        row.storage_version === SYNC_STORAGE_VERSION
+          ? decoded
+          : ((decoded.payload as JsonObject | undefined) ?? {});
+      if (row.operation_type === "holding.added") {
+        usedHoldingIds.add(row.holding_id);
+        const holding =
+          payload.holding &&
+          typeof payload.holding === "object" &&
+          !Array.isArray(payload.holding)
+            ? (payload.holding as JsonObject)
+            : null;
+        const quantity = holding?.quantity;
+        if (
+          typeof quantity === "number" &&
+          Number.isSafeInteger(quantity) &&
+          quantity >= 1 &&
+          quantity <= MAX_HOLDING_QUANTITY
+        ) {
+          quantities.set(row.holding_id, quantity);
+        } else {
+          quantities.delete(row.holding_id);
+        }
+      } else if (row.operation_type === "holding.quantity-adjusted") {
+        const current = quantities.get(row.holding_id);
+        const delta = payload.delta;
+        if (
+          current !== undefined &&
+          typeof delta === "number" &&
+          Number.isSafeInteger(delta)
+        ) {
+          const next = current + delta;
+          if (
+            Number.isSafeInteger(next) &&
+            next >= 0 &&
+            next <= MAX_HOLDING_QUANTITY
+          ) {
+            if (next === 0) quantities.delete(row.holding_id);
+            else quantities.set(row.holding_id, next);
+          } else {
+            quantities.delete(row.holding_id);
+          }
+        }
+      } else if (row.operation_type === "holding.removed") {
+        quantities.delete(row.holding_id);
+      }
+    };
+    rows.forEach(applyStored);
+
+    for (const operation of operations) {
+      if (operation.type === "holding.added") {
+        const holding = operation.payload.holding;
+        const holdingId =
+          typeof holding.id === "string" ? holding.id.trim() : "";
+        const cardId =
+          typeof holding.cardId === "string" ? holding.cardId.trim() : "";
+        const quantity = holding.quantity;
+        if (
+          holdingId !== operation.holdingId ||
+          cardId === "" ||
+          typeof quantity !== "number" ||
+          !Number.isSafeInteger(quantity) ||
+          quantity < 1 ||
+          quantity > MAX_HOLDING_QUANTITY
+        ) {
+          throw new SyncOperationInvalidError(
+            operation.id,
+            "A holding.added operation must contain a matching holding, card identifier, and valid quantity",
+          );
+        }
+        if (usedHoldingIds.has(operation.holdingId)) {
+          throw new SyncOperationInvalidError(
+            operation.id,
+            "A holding identifier cannot be reused after it has been added",
+          );
+        }
+        usedHoldingIds.add(operation.holdingId);
+        quantities.set(operation.holdingId, quantity);
+      } else if (operation.type === "holding.quantity-adjusted") {
+        const delta = operation.payload.delta;
+        const current = quantities.get(operation.holdingId);
+        const next = current === undefined ? Number.NaN : current + delta;
+        if (
+          !Number.isSafeInteger(delta) ||
+          delta === 0 ||
+          Math.abs(delta) > MAX_HOLDING_QUANTITY ||
+          current === undefined ||
+          !Number.isSafeInteger(next) ||
+          next < 0 ||
+          next > MAX_HOLDING_QUANTITY
+        ) {
+          throw new SyncOperationInvalidError(
+            operation.id,
+            "A quantity adjustment must target an active holding and keep its quantity within collection limits",
+          );
+        }
+        if (next === 0) quantities.delete(operation.holdingId);
+        else quantities.set(operation.holdingId, next);
+      } else if (operation.type === "holding.updated") {
+        if (!quantities.has(operation.holdingId)) {
+          throw new SyncOperationInvalidError(
+            operation.id,
+            "A holding update must target an active holding",
+          );
+        }
+      } else if (operation.type === "holding.removed") {
+        if (!quantities.has(operation.holdingId)) {
+          throw new SyncOperationInvalidError(
+            operation.id,
+            "A holding removal must target an active holding",
+          );
+        }
+        quantities.delete(operation.holdingId);
+      }
+    }
   }
 
   private deleteUnreferencedSyncObjects(limit: number): number {
@@ -720,30 +1066,86 @@ export class SqliteStore {
     return Number(row?.total_bytes ?? 0);
   }
 
-  deleteAccount(userId: string): boolean {
+  deleteAccount(
+    userId: string,
+    options: Pick<SyncStoreOptions, "retentionDays" | "maxAccounts" | "now">,
+  ): SyncAccountDeletion {
     if (userId.trim() === "")
       throw new Error("Sync user identifier cannot be empty");
 
-    let deleted = false;
-    let prunedObjects = 0;
+    const now = options.now ?? new Date();
+    if (Number.isNaN(now.getTime()))
+      throw new Error("Sync deletion time must be a valid date");
+    if (
+      !Number.isSafeInteger(options.retentionDays) ||
+      options.retentionDays < 1
+    ) {
+      throw new Error("retentionDays must be a positive integer");
+    }
+    const nowIso = now.toISOString();
+    const retentionUntil = addDays(now, options.retentionDays).toISOString();
+    const maxAccounts = options.maxAccounts ?? DEFAULT_MAX_ACCOUNTS;
+    if (!Number.isSafeInteger(maxAccounts) || maxAccounts < 1)
+      throw new Error("maxAccounts must be a positive integer");
+    let accountExisted = false;
+    let nextGeneration = 1;
     this.database.exec("BEGIN IMMEDIATE");
     try {
-      const result = this.database
-        .prepare("DELETE FROM sync_accounts WHERE user_id = ?")
-        .run(userId);
-      deleted = result.changes === 1;
-      if (deleted) {
-        // Each DELETE is bounded to 10k rows, while the loop gives the
-        // account-erasure API a final no-orphan guarantee.
-        prunedObjects = this.deleteAllUnreferencedSyncObjects();
+      const account = this.database
+        .prepare(
+          `SELECT generation, retention_until
+           FROM sync_accounts
+           WHERE user_id = ?`,
+        )
+        .get(userId) as unknown as SyncAccountRow | undefined;
+      accountExisted = account !== undefined;
+      if (!account) {
+        const accountCount = Number(
+          (
+            this.database
+              .prepare("SELECT COUNT(*) AS count FROM sync_accounts")
+              .get() as { count?: number } | undefined
+          )?.count ?? 0,
+        );
+        if (accountCount >= maxAccounts)
+          throw new SyncStorageLimitError("accounts");
+      } else {
+        storedGeneration(Number(account.generation));
       }
+      nextGeneration = this.allocateSyncGeneration();
+      // Generation 1 is the implicit initial epoch used by legacy clients.
+      // Deleting a never-before-seen account must rotate past it so a stale
+      // generation-1 queue cannot be accepted after the deletion response.
+      if (!account && nextGeneration === 1) {
+        nextGeneration = this.allocateSyncGeneration();
+      }
+
+      this.database
+        .prepare(
+          `INSERT INTO sync_accounts (
+             user_id, retention_until, created_at, generation
+           ) VALUES (?, ?, ?, ?)
+           ON CONFLICT (user_id) DO UPDATE SET
+             retention_until = excluded.retention_until,
+             generation = excluded.generation`,
+        )
+        .run(userId, retentionUntil, nowIso, nextGeneration);
+      this.database
+        .prepare("DELETE FROM sync_events WHERE user_id = ?")
+        .run(userId);
+      // Each DELETE is bounded to 10k rows, while the loop gives the
+      // account-erasure API a final no-orphan guarantee.
+      this.deleteAllUnreferencedSyncObjects();
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
       throw error;
     }
-    if (deleted || prunedObjects > 0) this.checkpointWal();
-    return deleted;
+    this.checkpointWal();
+    return {
+      accountExisted,
+      generation: String(nextGeneration),
+    };
   }
 
   pruneExpiredAccounts(now = new Date(), limit = 100): number {
@@ -802,18 +1204,37 @@ export class SqliteStore {
       throw new Error("Sync user identifier cannot be empty");
 
     const cursor = parseCursor(request.cursor);
+    const requestedGeneration = parseGeneration(request.generation);
+    if (
+      requestedGeneration === null &&
+      (cursor !== 0 || request.operations.length > 0)
+    ) {
+      throw new Error(
+        "A null sync generation is only valid for an empty bootstrap request",
+      );
+    }
     const now = options.now ?? new Date();
     const nowIso = now.toISOString();
     const retentionUntil = addDays(now, options.retentionDays).toISOString();
     const eventLimit = options.eventLimit ?? 500;
     const maxOperationBytes =
       options.maxOperationBytes ?? DEFAULT_MAX_OPERATION_BYTES;
+    const maxAccounts = options.maxAccounts ?? DEFAULT_MAX_ACCOUNTS;
     const maxAccountEvents =
       options.maxAccountEvents ?? DEFAULT_MAX_ACCOUNT_EVENTS;
     const maxAccountBytes =
       options.maxAccountBytes ?? DEFAULT_MAX_ACCOUNT_BYTES;
     const maxPullBytes = options.maxPullBytes ?? DEFAULT_MAX_PULL_BYTES;
     const acceptedOperationIds: string[] = [];
+    const acceptedOperationIdSet = new Set<string>();
+    const acceptOperation = (operationId: string): void => {
+      if (acceptedOperationIdSet.has(operationId)) return;
+      acceptedOperationIdSet.add(operationId);
+      acceptedOperationIds.push(operationId);
+    };
+    let responseGeneration = "1";
+    let storedRetentionUntil = retentionUntil;
+    let deferredGenerationMismatch: SyncGenerationMismatchError | null = null;
     const serializedOperations = request.operations.map((operation) => {
       const json = JSON.stringify(operation);
       const bytes = Buffer.byteLength(json, "utf8");
@@ -837,6 +1258,7 @@ export class SqliteStore {
     for (const [name, value] of [
       ["eventLimit", eventLimit],
       ["maxOperationBytes", maxOperationBytes],
+      ["maxAccounts", maxAccounts],
       ["maxAccountEvents", maxAccountEvents],
       ["maxAccountBytes", maxAccountBytes],
       ["maxPullBytes", maxPullBytes],
@@ -853,26 +1275,104 @@ export class SqliteStore {
 
     this.database.exec("BEGIN IMMEDIATE");
     try {
-      this.database
+      let account = this.database
         .prepare(
-          `INSERT INTO sync_accounts (user_id, retention_until, created_at)
-           VALUES (?, ?, ?)
-           ON CONFLICT (user_id) DO NOTHING`,
+          `SELECT generation, retention_until
+           FROM sync_accounts
+           WHERE user_id = ?`,
         )
-        .run(userId, retentionUntil, nowIso);
+        .get(userId) as unknown as SyncAccountRow | undefined;
+      if (account && account.retention_until <= nowIso) {
+        const freshGeneration = this.allocateSyncGeneration();
+        this.database
+          .prepare("DELETE FROM sync_events WHERE user_id = ?")
+          .run(userId);
+        this.database
+          .prepare(
+            `UPDATE sync_accounts
+             SET retention_until = ?,
+                 created_at = ?,
+                 generation = ?
+             WHERE user_id = ?`,
+          )
+          .run(retentionUntil, nowIso, freshGeneration, userId);
+        this.deleteAllUnreferencedSyncObjects();
+        account = {
+          generation: freshGeneration,
+          retention_until: retentionUntil,
+        };
+        responseGeneration = String(freshGeneration);
+        storedRetentionUntil = retentionUntil;
+        if (requestedGeneration !== null) {
+          // Expiry is an epoch boundary even when the bounded global prune has
+          // not reached this account yet. Persist the empty replacement epoch
+          // before returning 409 so no stale queue can revive expired data.
+          deferredGenerationMismatch = new SyncGenerationMismatchError(
+            responseGeneration,
+          );
+        }
+      }
+      if (!account) {
+        const accountCount = Number(
+          (
+            this.database
+              .prepare("SELECT COUNT(*) AS count FROM sync_accounts")
+              .get() as { count?: number } | undefined
+          )?.count ?? 0,
+        );
+        if (accountCount >= maxAccounts)
+          throw new SyncStorageLimitError("accounts");
+      }
+      let currentGeneration: number;
+      if (!account && requestedGeneration !== null) {
+        // The previous account may have expired. Allocate and persist a fresh
+        // tombstone before returning 409 so an old device can never recreate
+        // the lost epoch.
+        currentGeneration = this.allocateSyncGeneration();
+        this.database
+          .prepare(
+            `INSERT INTO sync_accounts (
+               user_id, retention_until, created_at, generation
+             ) VALUES (?, ?, ?, ?)`,
+          )
+          .run(userId, retentionUntil, nowIso, currentGeneration);
+        responseGeneration = String(currentGeneration);
+        storedRetentionUntil = retentionUntil;
+        deferredGenerationMismatch = new SyncGenerationMismatchError(
+          responseGeneration,
+        );
+      } else {
+        currentGeneration = account
+          ? storedGeneration(Number(account.generation))
+          : this.allocateSyncGeneration();
+      }
+      if (
+        deferredGenerationMismatch === null &&
+        requestedGeneration !== null &&
+        requestedGeneration !== currentGeneration
+      ) {
+        throw new SyncGenerationMismatchError(String(currentGeneration));
+      }
+
+      if (deferredGenerationMismatch === null) {
+        this.database
+          .prepare(
+            `INSERT INTO sync_accounts (
+               user_id, retention_until, created_at, generation
+             ) VALUES (?, ?, ?, ?)
+             ON CONFLICT (user_id) DO NOTHING`,
+          )
+          .run(userId, retentionUntil, nowIso, currentGeneration);
+        responseGeneration = String(currentGeneration);
+        storedRetentionUntil = account?.retention_until ?? retentionUntil;
+      }
 
       const insertEvent = this.database.prepare(
         `INSERT INTO sync_events (
            user_id, operation_id, operation_type, holding_id, operation_json,
            storage_version, device_id, client_synced_at, card_snapshot_id,
            quote_snapshot_id, stored_bytes, occurred_at, received_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (user_id, operation_id) DO NOTHING`,
-      );
-      const operationExists = this.database.prepare(
-        `SELECT 1 AS present
-         FROM sync_events
-         WHERE user_id = ? AND operation_id = ?`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
 
       const usage = this.database
@@ -900,13 +1400,55 @@ export class SqliteStore {
           0,
         );
 
+      const newSerializedOperations: typeof serializedOperations = [];
+      const requestIdentities = new Map<string, string>();
+      for (const serialized of deferredGenerationMismatch === null
+        ? serializedOperations
+        : []) {
+        const identity = canonicalSyncOperation(serialized.operation);
+        const priorIdentity = requestIdentities.get(serialized.operation.id);
+        if (priorIdentity !== undefined) {
+          if (priorIdentity !== identity) {
+            throw new SyncOperationConflictError(serialized.operation.id);
+          }
+          continue;
+        }
+        requestIdentities.set(serialized.operation.id, identity);
+
+        const existing = this.storedSyncOperation(
+          userId,
+          serialized.operation.id,
+        );
+        if (existing) {
+          if (canonicalSyncOperation(existing) !== identity) {
+            throw new SyncOperationConflictError(serialized.operation.id);
+          }
+          acceptOperation(serialized.operation.id);
+        } else {
+          newSerializedOperations.push(serialized);
+        }
+      }
+
+      if (
+        deferredGenerationMismatch === null &&
+        request.requireEmpty === true &&
+        accountEvents > 0 &&
+        newSerializedOperations.length > 0
+      ) {
+        throw new SyncEnrollmentConflictError(accountEvents);
+      }
+
+      this.validateSyncOperationSemantics(
+        userId,
+        newSerializedOperations.map(({ operation }) => operation),
+      );
+
       for (const {
         operation,
         compacted,
         payloadJson,
         storedBytes,
-      } of serializedOperations) {
-        if (operationExists.get(userId, operation.id)) continue;
+      } of newSerializedOperations) {
         const cardSnapshot = compacted.cardSnapshot
           ? this.internSyncObject("card", compacted.cardSnapshot)
           : null;
@@ -928,24 +1470,25 @@ export class SqliteStore {
           operation.occurredAt,
           nowIso,
         );
-        if (result.changes === 1) {
-          accountEvents += 1;
-          accountBytes += storedBytes;
-          // Shared snapshots count once per account, regardless of how many
-          // operations reference them. Global content-addressed deduplication
-          // still ensures the database stores only one physical object.
-          for (const snapshot of [cardSnapshot, quoteSnapshot]) {
-            if (snapshot && !accountSharedObjects.has(snapshot.objectId)) {
-              accountBytes += snapshot.storedBytes;
-              accountSharedObjects.set(snapshot.objectId, snapshot.storedBytes);
-            }
-          }
-          if (accountEvents > maxAccountEvents)
-            throw new SyncStorageLimitError("events");
-          if (accountBytes > maxAccountBytes)
-            throw new SyncStorageLimitError("bytes");
-          acceptedOperationIds.push(operation.id);
+        if (result.changes !== 1) {
+          throw new Error("Sync operation insert did not make progress");
         }
+        accountEvents += 1;
+        accountBytes += storedBytes;
+        // Shared snapshots count once per account, regardless of how many
+        // operations reference them. Global content-addressed deduplication
+        // still ensures the database stores only one physical object.
+        for (const snapshot of [cardSnapshot, quoteSnapshot]) {
+          if (snapshot && !accountSharedObjects.has(snapshot.objectId)) {
+            accountBytes += snapshot.storedBytes;
+            accountSharedObjects.set(snapshot.objectId, snapshot.storedBytes);
+          }
+        }
+        if (accountEvents > maxAccountEvents)
+          throw new SyncStorageLimitError("events");
+        if (accountBytes > maxAccountBytes)
+          throw new SyncStorageLimitError("bytes");
+        acceptOperation(operation.id);
       }
 
       this.database.exec("COMMIT");
@@ -954,9 +1497,8 @@ export class SqliteStore {
       throw error;
     }
 
-    const storedRetention = this.database
-      .prepare("SELECT retention_until FROM sync_accounts WHERE user_id = ?")
-      .get(userId) as unknown as RetentionRow;
+    if (deferredGenerationMismatch) throw deferredGenerationMismatch;
+
     const rows = this.database
       .prepare(
         `SELECT event.sequence,
@@ -986,35 +1528,15 @@ export class SqliteStore {
     const emptyResponse: SyncResponse = {
       acceptedOperationIds,
       cursor: String(cursor),
+      generation: responseGeneration,
       events: [],
       hasMore: true,
-      retentionUntil: storedRetention.retention_until,
+      retentionUntil: storedRetentionUntil,
     };
     let responseBytes =
       Buffer.byteLength(JSON.stringify(emptyResponse), "utf8") + 64;
     for (const row of rows) {
-      const operation =
-        row.storage_version === SYNC_STORAGE_VERSION
-          ? rehydrateSyncOperation(
-              {
-                id: row.operation_id,
-                type: row.operation_type,
-                holdingId: row.holding_id,
-                deviceId: row.device_id ?? "",
-                occurredAt: row.occurred_at,
-                ...(row.client_synced_at
-                  ? { syncedAt: row.client_synced_at }
-                  : {}),
-              },
-              JSON.parse(row.operation_json) as JsonObject,
-              row.card_snapshot_json
-                ? (JSON.parse(row.card_snapshot_json) as JsonObject)
-                : null,
-              row.quote_snapshot_json
-                ? (JSON.parse(row.quote_snapshot_json) as JsonObject)
-                : null,
-            )
-          : (JSON.parse(row.operation_json) as SyncOperation);
+      const operation = syncOperationFromRow(row);
       const event = {
         ...operation,
         sequence: Number(row.sequence),
@@ -1041,9 +1563,10 @@ export class SqliteStore {
     const response: SyncResponse = {
       acceptedOperationIds,
       cursor: String(nextCursor),
+      generation: responseGeneration,
       events,
       hasMore: moreRow?.present === 1,
-      retentionUntil: storedRetention.retention_until,
+      retentionUntil: storedRetentionUntil,
     };
     while (
       response.events.length > 0 &&

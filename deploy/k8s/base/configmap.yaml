@@ -8,7 +8,7 @@ data:
   HOST: "0.0.0.0"
   PORT: "3000"
   DATA_DIR: "/data"
-  PUBLIC_ORIGIN: "https://pokemon-cards.sent-tech.ca"
+  PUBLIC_ORIGIN: "https://pokemon.sent-tech.ca"
   TCGDEX_BASE_URL: "https://api.tcgdex.net/v2"
   # TCGdex catalogue metadata is MIT-licensed. Artwork and market quote
   # switches remain separately disabled until their own rights are approved.
@@ -33,4 +33,9 @@ data:
   OIDC_CLIENT_ID: "pokemon-cards"
   OIDC_AUDIENCE: ""
   OIDC_REQUIRED: "false"
+  ACCOUNT_IDENTITY_READY: "false"
+  ACCOUNT_RECOVERY_READY: "false"
   SYNC_RETENTION_DAYS: "1826"
+  # 1,200 × 2.5 MiB bounds logical sync data at 3 GiB on the 4 GiB PVC.
+  SYNC_MAX_ACCOUNTS: "1200"
+  SYNC_MAX_ACCOUNT_BYTES: "2621440"

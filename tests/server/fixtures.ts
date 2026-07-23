@@ -58,6 +58,7 @@ export function testConfig(databasePath = ":memory:"): RuntimeConfig {
     },
     sync: {
       retentionDays: 1_826,
+      maxAccounts: 1_200,
       maxBatchSize: 200,
       maxOperationBytes: 64 * 1024,
       maxAccountEvents: 10_000,
@@ -135,7 +136,21 @@ export function testHolding(overrides: Partial<Holding> = {}): Holding {
 export function testOperation(
   overrides: Partial<SyncOperation> = {},
 ): SyncOperation {
-  const holding = testHolding();
+  const holding = {
+    id: "holding-1",
+    cardId: "pokemon-card:en:base1:58:pikachu",
+    card: {
+      id: "pokemon-card:en:base1:58:pikachu",
+      name: "Pikachu",
+      number: "58",
+      language: "en",
+    },
+    quantity: 1,
+    finish: "normal",
+    condition: "near-mint",
+    addedAt: FIXED_NOW.toISOString(),
+    updatedAt: FIXED_NOW.toISOString(),
+  };
   return {
     id: "operation-1",
     deviceId: "device-1",

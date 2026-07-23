@@ -198,22 +198,68 @@ export function createAddedEvent(
   };
 }
 
-export function replayCollection(
+/**
+ * Produces a wall-clock timestamp which is also causally after every supplied
+ * holding timestamp. This prevents an update made on a device with a slow
+ * clock from replaying before the state it observed.
+ */
+export function nextCollectionEventTimestamp(
+  ...causalTimestamps: (string | undefined)[]
+): string {
+  const causalFloor = causalTimestamps.reduce((maximum, value) => {
+    if (!value) return maximum;
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp) ? Math.max(maximum, timestamp) : maximum;
+  }, Number.NEGATIVE_INFINITY);
+  const timestamp = Math.max(
+    Date.now(),
+    Number.isFinite(causalFloor) ? causalFloor + 1 : Number.NEGATIVE_INFINITY,
+  );
+  return new Date(timestamp).toISOString();
+}
+
+function compareCollectionEvents(
+  left: CollectionEvent,
+  right: CollectionEvent,
+): number {
+  if (left.serverSequence !== undefined && right.serverSequence !== undefined) {
+    return (
+      left.serverSequence - right.serverSequence ||
+      left.id.localeCompare(right.id)
+    );
+  }
+  // A local event is created from a snapshot which already includes every
+  // downloaded server event, so an unsequenced local mutation follows the
+  // sequenced base even when the device clock is behind.
+  if (left.serverSequence !== undefined) return -1;
+  if (right.serverSequence !== undefined) return 1;
+  return (
+    left.occurredAt.localeCompare(right.occurredAt) ||
+    left.id.localeCompare(right.id)
+  );
+}
+
+function replayCollectionInternal(
   events: CollectionEvent[],
+  strict: boolean,
 ): CollectionSnapshot {
   const holdings = new Map<string, Holding>();
-  const sorted = [...events].sort(
-    (left, right) =>
-      left.occurredAt.localeCompare(right.occurredAt) ||
-      left.id.localeCompare(right.id),
-  );
+  const usedHoldingIds = new Set<string>();
+  const sorted = [...events].sort(compareCollectionEvents);
   const activities: CollectionActivity[] = [];
 
   for (const event of sorted) {
     const existing = holdings.get(event.holdingId);
     if (event.type === "holding.added") {
-      if (!existing)
+      if (usedHoldingIds.has(event.holdingId)) {
+        if (strict)
+          throw new Error(
+            "A holding identifier cannot be added more than once",
+          );
+      } else {
+        usedHoldingIds.add(event.holdingId);
         holdings.set(event.holdingId, structuredClone(event.payload.holding));
+      }
     } else if (
       event.type === "holding.quantity-adjusted" &&
       existing &&
@@ -233,6 +279,8 @@ export function replayCollection(
         updatedAt: event.occurredAt,
         deletedAt: nextQuantity === 0 ? event.occurredAt : undefined,
       });
+    } else if (event.type === "holding.quantity-adjusted" && strict) {
+      throw new Error("Quantity adjustment requires an active holding");
     } else if (
       event.type === "holding.updated" &&
       existing &&
@@ -256,12 +304,20 @@ export function replayCollection(
             : (event.payload.quote ?? existing.quote),
         updatedAt: event.occurredAt,
       });
-    } else if (event.type === "holding.removed" && existing) {
+    } else if (event.type === "holding.updated" && strict) {
+      throw new Error("Holding update requires an active holding");
+    } else if (
+      event.type === "holding.removed" &&
+      existing &&
+      !existing.deletedAt
+    ) {
       holdings.set(event.holdingId, {
         ...existing,
         deletedAt: event.occurredAt,
         updatedAt: event.occurredAt,
       });
+    } else if (event.type === "holding.removed" && strict) {
+      throw new Error("Holding removal requires an active holding");
     }
 
     const current = holdings.get(event.holdingId);
@@ -288,6 +344,24 @@ export function replayCollection(
     activities: activities.reverse(),
     eventCount: events.length,
   };
+}
+
+/** Tolerant projection used to display an already persisted local snapshot. */
+export function replayCollection(
+  events: CollectionEvent[],
+): CollectionSnapshot {
+  return replayCollectionInternal(events, false);
+}
+
+/**
+ * Strict state-machine validation shared by every local write/import path.
+ * It mirrors the central service: holding IDs are single-use and mutations
+ * target an active holding with a bounded resulting quantity.
+ */
+export function validateAndReplayCollection(
+  events: CollectionEvent[],
+): CollectionSnapshot {
+  return replayCollectionInternal(events, true);
 }
 
 export function findDuplicate(

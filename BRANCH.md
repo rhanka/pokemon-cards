@@ -2,12 +2,12 @@
 
 ## Objective
 
-- [x] Deliver a deployable mobile-first Svelte PWA that identifies Pokémon card printings, estimates sourced market value, and keeps a 1,000-card local-first collection with optional five-year cloud sync.
+- [ ] Deliver a deployable mobile-first Svelte PWA that identifies Pokémon card printings, estimates sourced market value, and keeps an account-central collection with an IndexedDB offline cache and five-year history.
 
 ## Scope / Guardrails
 
 - [x] Keep scan inference in the TypeScript service, transient in memory, and never persist or train on a photo.
-- [x] Keep finish, language, and condition user-confirmed; never claim authentication or automated grading.
+- [x] Infer card language through bilingual catalogue matching, keep ambiguous printing, finish, and condition user-confirmed, and never claim authentication or automated grading.
 - [x] Use only catalogue, price, code, dataset, and model assets with documented compatible provenance.
 - [x] Keep free-user marginal server cost near zero and cap paid price at complete cost plus 50%.
 - [x] Deploy the current POC to the live Scaleway path at 20m requested CPU; defer the OVH scale migration until its platform is operational.
@@ -65,7 +65,7 @@
   - [x] Add `ml/tests/test_rights_manifest.py`, `ml/tests/test_split.py`, and `ml/tests/test_metrics.py`.
   - [x] Lot gate: `python -m pytest ml/tests` and the dry-run fixture produces a deterministic report.
 - [ ] Lot 4 — Auth, container, Kubernetes, and CI/CD
-  - [x] Wire OIDC authorization-code + PKCE callback/logout and cloud-sync UI when the public client is configured.
+  - [ ] Verify the production OIDC callback/provider logout contract and disposition of any legacy raw-sub identity data before enabling cloud sync.
   - [x] Add a non-root multi-stage OCI image, healthcheck, immutable runtime, SQLite PVC path, and graceful shutdown.
   - [x] Add namespace-independent Deployment, Service, PVC, Ingress TLS, NetworkPolicy, PodDisruptionBudget, and resource limits under `deploy/k8s`.
   - [x] Add GitHub Actions checks, GHCR build with immutable SHA tag, and namespace-scoped manual deployment under `BR01-EX1`.
@@ -89,3 +89,26 @@
   - [x] Set Kubernetes requests to 20m/256Mi, limits to 300m/384Mi, keep Recreate, and enable only MIT TCGdex metadata.
   - [x] Rebenchmark the exact Alpine image at 300m/384Mi after the Tesseract privacy reinitialization.
   - [ ] Publish the new immutable digest, owner-apply the POC after live capacity recheck, then create DNS and run the public smoke.
+- [ ] Lot 7 — Bilingual scan and corrected product chrome
+  - [x] Remove the pre-scan printed-language picker and perform bounded EN+FR catalogue searches after one bilingual OCR pass.
+  - [x] Preserve and display candidate language, abstain on ambiguity, and use the selected candidate language for hydration and storage.
+  - [x] Remove local-first product messaging and the duplicate Settings locale tabs; keep the AppChrome locale selector and factual offline state.
+  - [x] Propagate client disconnect cancellation to OCR and enforce a measured no-queue response deadline.
+  - [ ] Lot gate: focused scanner/API/i18n tests, `npm run check`, and mobile accessibility smoke.
+- [ ] Lot 8 — Account-central enrollment and automatic sync
+  - [x] Add explicit anonymous-to-account adoption with atomic ownership transfer, idempotence, rollback, and remote-nonempty merge confirmation.
+  - [x] Add a single-flight sync coordinator for authentication, mutations, imports, reconnect, visibility, and pageshow with bounded retry/backoff.
+  - [x] Expose accessible account-required, pending, syncing, saved, offline, auth-required, and error states without claiming durability before acknowledgement.
+  - [x] Prevent authenticated local replace and delete-then-reseed until their server-safe contracts exist.
+  - [x] Lot gate: DB adoption/isolation tests, sync trigger/retry tests, two-device reconstruction, and no resurrection/reseed tests.
+- [ ] Lot 9 — Identity, storage, backup, and recovery
+  - [ ] Register and verify the Sentropic public PKCE client for `https://pokemon.sent-tech.ca/auth/callback` with the exact API resource/audience.
+  - [ ] Update the canonical hostname, resize the primary PVC for the 1,000×1,000 central cohort, and retain the 20m CPU request.
+  - [ ] Add an application-consistent off-PVC backup, bounded retention/erasure, missed-backup alert, and isolated restore rehearsal.
+  - [x] Recalculate economics for central storage on every enrolled account.
+  - [ ] Lot gate: live OIDC enrollment, restore evidence, storage budget, and authenticated API isolation smoke.
+- [ ] Lot 10 — Immutable release and production proof
+  - [ ] Run full tests, build, audit, container, manifest, and adversarial review gates.
+  - [ ] Commit selectively without `.remote/**`, push `main`, and publish the immutable OCI digest.
+  - [ ] Deploy through the owning Kubernetes lane and verify `https://pokemon.sent-tech.ca`.
+  - [ ] Lot gate: clean tracked worktree, green CI, central-sync two-browser smoke, bilingual scan smoke, and rollback evidence.

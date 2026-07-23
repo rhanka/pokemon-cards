@@ -1,8 +1,9 @@
 # CardScope ML pipeline
 
-This directory contains a clean-room, local-first visual retrieval pipeline. It does **not**
-contain card images, datasets, pretrained weights, or model artifacts. MobileNetV3-Small is
-created with `weights=None`; the commands never fetch a checkpoint.
+This directory contains a clean-room visual retrieval pipeline for offline
+training and evaluation. It does **not** contain card images, datasets,
+pretrained weights, or model artifacts. MobileNetV3-Small is created with
+`weights=None`; the commands never fetch a checkpoint.
 
 The release target is a 224 px MobileNetV3-Small encoder with a L2-normalized 128-dimensional
 embedding. Recognition is nearest-reference retrieval, complemented by OCR in the application.

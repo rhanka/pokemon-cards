@@ -51,6 +51,7 @@ export interface RuntimeConfig {
   };
   sync: {
     retentionDays: number;
+    maxAccounts: number;
     maxBatchSize: number;
     maxOperationBytes: number;
     maxAccountEvents: number;
@@ -64,6 +65,8 @@ export interface RuntimeConfig {
 
 const DEFAULT_PORT = 8787;
 const DEFAULT_RETENTION_DAYS = 1_826;
+const DEFAULT_MAX_SYNC_ACCOUNTS = 1_200;
+const DEFAULT_MAX_ACCOUNT_BYTES = 2_621_440;
 const MAX_CATALOG_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_CATALOG_CACHE_BYTES = 1024 * 1024 * 1024;
 const MAX_RECOGNITION_IMAGE_BYTES = 4 * 1024 * 1024;
@@ -163,15 +166,40 @@ export function normalizedOidcUrl(value: string, name: string): string {
   );
 }
 
+export function normalizedOidcAudience(value: string, name: string): string {
+  const normalized = value.trim();
+  try {
+    new URL(normalized);
+    if (normalized.includes("#")) {
+      throw new Error();
+    }
+    return normalized;
+  } catch {
+    throw new Error(`${name} must be an absolute URI without a fragment`);
+  }
+}
+
 export function loadConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): RuntimeConfig {
   const oidcEnabled = parseBoolean(env.OIDC_REQUIRED, false, "OIDC_REQUIRED");
+  const accountIdentityReady = parseBoolean(
+    env.ACCOUNT_IDENTITY_READY,
+    false,
+    "ACCOUNT_IDENTITY_READY",
+  );
+  const accountRecoveryReady = parseBoolean(
+    env.ACCOUNT_RECOVERY_READY,
+    false,
+    "ACCOUNT_RECOVERY_READY",
+  );
   const oidcIssuer = env.OIDC_ISSUER?.trim()
     ? normalizedOidcUrl(env.OIDC_ISSUER.trim(), "OIDC_ISSUER")
     : null;
   const clientId = env.OIDC_CLIENT_ID?.trim() || "pokemon-cards";
-  const audience = env.OIDC_AUDIENCE?.trim() || null;
+  const audience = env.OIDC_AUDIENCE?.trim()
+    ? normalizedOidcAudience(env.OIDC_AUDIENCE, "OIDC_AUDIENCE")
+    : null;
   const oidcJwksUri = env.OIDC_JWKS_URI?.trim()
     ? normalizedOidcUrl(env.OIDC_JWKS_URI.trim(), "OIDC_JWKS_URI")
     : null;
@@ -181,6 +209,16 @@ export function loadConfig(
   }
   if (oidcEnabled && !audience) {
     throw new Error("OIDC_AUDIENCE is required when OIDC_REQUIRED=true");
+  }
+  if (oidcEnabled && !accountIdentityReady) {
+    throw new Error(
+      "ACCOUNT_IDENTITY_READY=true is required when OIDC_REQUIRED=true",
+    );
+  }
+  if (oidcEnabled && !accountRecoveryReady) {
+    throw new Error(
+      "ACCOUNT_RECOVERY_READY=true is required when OIDC_REQUIRED=true",
+    );
   }
   if (
     oidcIssuer &&
@@ -413,6 +451,12 @@ export function loadConfig(
         "SYNC_RETENTION_DAYS",
         1,
       ),
+      maxAccounts: parseInteger(
+        env.SYNC_MAX_ACCOUNTS,
+        DEFAULT_MAX_SYNC_ACCOUNTS,
+        "SYNC_MAX_ACCOUNTS",
+        1,
+      ),
       maxBatchSize: parseInteger(
         env.SYNC_MAX_BATCH_SIZE,
         200,
@@ -428,7 +472,7 @@ export function loadConfig(
       ),
       maxAccountBytes: parseInteger(
         env.SYNC_MAX_ACCOUNT_BYTES,
-        64 * 1024 * 1024,
+        DEFAULT_MAX_ACCOUNT_BYTES,
         "SYNC_MAX_ACCOUNT_BYTES",
         4_096,
       ),
@@ -465,6 +509,7 @@ export function toPublicConfig(config: RuntimeConfig): PublicAppConfig {
       enabled: config.oidc.enabled,
       retentionDays: config.sync.retentionDays,
       maxBatchSize: config.sync.maxBatchSize,
+      maxOperationBytes: config.sync.maxOperationBytes,
     },
     catalogue: {
       languages: [...config.catalogue.languages],

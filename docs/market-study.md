@@ -16,6 +16,8 @@ Verified on 22 July 2026. Prices are public list prices and may vary by country,
 Scanning is already a free acquisition feature. CardScope therefore optimizes the collector's return rather than charging for capture:
 
 - free privacy-bounded scan and export without an account;
+- a central collection after enrollment, with IndexedDB used only as its
+  offline cache/outbox;
 - a realistic net-sale range after condition, fees, postage, liquidity, and quote age;
 - cost basis and gain/loss;
 - duplicates and the cards worth verifying, grading, selling, or trading first;

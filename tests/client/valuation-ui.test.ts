@@ -160,6 +160,9 @@ describe("valuation UI", () => {
       onUpdate,
     });
 
+    await userEvent.click(
+      screen.getByRole("button", { name: "Edit Card usd" }),
+    );
     await userEvent.selectOptions(screen.getByLabelText("Finish"), "reverse");
     expect(onUpdate).toHaveBeenCalledWith("usd", {
       finish: "reverse",
@@ -218,6 +221,9 @@ describe("valuation UI", () => {
       onUpdate,
     });
 
+    await userEvent.click(
+      screen.getByRole("button", { name: "Modifier Card preferred" }),
+    );
     await userEvent.selectOptions(screen.getByLabelText("État"), "excellent");
 
     expect(onUpdate).toHaveBeenCalledWith("preferred", {
@@ -225,10 +231,43 @@ describe("valuation UI", () => {
       quote: expect.objectContaining({ market: "cardmarket", currency: "EUR" }),
     });
   });
+
+  it("should page large collections and mount only the requested editor", async () => {
+    const holdings = Array.from({ length: 81 }, (_, index) =>
+      makeHolding(`page-${index}`, normalQuote, {
+        amount: index + 1,
+        currency: "USD",
+      }),
+    );
+    render(CollectionPage, {
+      locale: "en",
+      snapshot: { holdings, activities: [], eventCount: holdings.length },
+      valuationPreference: { market: "tcgplayer", currency: "USD" },
+      onAdjust: vi.fn(),
+      onRemove: vi.fn(),
+      onUpdate: vi.fn(),
+    });
+
+    expect(screen.getByText("1–40 of 81")).toBeInTheDocument();
+    expect(screen.getByText("Card page-0")).toBeInTheDocument();
+    expect(screen.queryByText("Card page-40")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Finish")).not.toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getAllByRole("button", { name: /^Edit Card page-/ })[0],
+    );
+    expect(screen.getAllByLabelText("Finish")).toHaveLength(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByText("41–80 of 81")).toBeInTheDocument();
+    expect(screen.getByText("Card page-40")).toBeInTheDocument();
+    expect(screen.queryByText("Card page-0")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Finish")).not.toBeInTheDocument();
+  });
 });
 
-describe("scanner language choice", () => {
-  it("should keep scan controls disabled until the printed card language is explicitly selected", async () => {
+describe("scanner language inference", () => {
+  it("should expose scan controls without asking for the printed language", () => {
     const config: RuntimeConfig = {
       appName: "CardScope",
       recognition: {
@@ -237,7 +276,12 @@ describe("scanner language choice", () => {
         maxImageBytes: 2 * 1024 * 1024,
       },
       auth: { enabled: false, scope: "openid" },
-      sync: { enabled: false, retentionDays: 1826 },
+      sync: {
+        enabled: false,
+        retentionDays: 1826,
+        maxBatchSize: 100,
+        maxOperationBytes: 64 * 1024,
+      },
       valuation: { marketQuotesEnabled: false },
     };
     render(ScannerPage, {
@@ -248,14 +292,11 @@ describe("scanner language choice", () => {
       onAdd: vi.fn(),
     });
 
-    expect(screen.getByRole("button", { name: "Use camera" })).toBeDisabled();
-    expect(screen.getByLabelText("Choose photo")).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Search" })).toBeDisabled();
-
-    await userEvent.click(screen.getByRole("radio", { name: "English" }));
-
     expect(screen.getByRole("button", { name: "Use camera" })).toBeEnabled();
     expect(screen.getByLabelText("Choose photo")).toBeEnabled();
     expect(screen.getByRole("button", { name: "Search" })).toBeEnabled();
+    expect(
+      screen.queryByRole("group", { name: "Card language" }),
+    ).not.toBeInTheDocument();
   });
 });

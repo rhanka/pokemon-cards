@@ -119,6 +119,8 @@ export type RuntimeConfig = {
   sync: {
     enabled: boolean;
     retentionDays: number;
+    maxBatchSize: number;
+    maxOperationBytes: number;
   };
   valuation: {
     marketQuotesEnabled: boolean;
@@ -147,6 +149,8 @@ export type HoldingAddedEvent = {
   holdingId: string;
   occurredAt: string;
   deviceId: string;
+  /** Authoritative global order assigned by the central sync service. */
+  serverSequence?: number;
   payload: { holding: Holding };
   syncedAt?: string;
 };
@@ -157,6 +161,8 @@ export type QuantityAdjustedEvent = {
   holdingId: string;
   occurredAt: string;
   deviceId: string;
+  /** Authoritative global order assigned by the central sync service. */
+  serverSequence?: number;
   payload: { delta: number };
   syncedAt?: string;
 };
@@ -167,6 +173,8 @@ export type HoldingUpdatedEvent = {
   holdingId: string;
   occurredAt: string;
   deviceId: string;
+  /** Authoritative global order assigned by the central sync service. */
+  serverSequence?: number;
   payload: {
     finish?: CardFinish;
     condition?: CardCondition;
@@ -183,6 +191,8 @@ export type HoldingRemovedEvent = {
   holdingId: string;
   occurredAt: string;
   deviceId: string;
+  /** Authoritative global order assigned by the central sync service. */
+  serverSequence?: number;
   payload: { reason?: string };
   syncedAt?: string;
 };
