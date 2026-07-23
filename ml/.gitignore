@@ -1,0 +1,10 @@
+artifacts/
+runs/
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.npz
+__pycache__/
+.pytest_cache/

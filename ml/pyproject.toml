@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cardscope-ml"
+version = "0.1.0"
+description = "Rights-gated, reproducible visual retrieval pipeline for CardScope"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "CardScope contributors" }]
+dependencies = []
+
+[project.optional-dependencies]
+data = [
+  "Pillow>=10.2,<12",
+]
+train = [
+  "Pillow>=10.2,<12",
+  "numpy>=1.26,<3",
+  "torch>=2.3,<3",
+  "torchvision>=0.18,<1",
+]
+export = [
+  "Pillow>=10.2,<12",
+  "numpy>=1.26,<3",
+  "torch>=2.3,<3",
+  "torchvision>=0.18,<1",
+  "onnx>=1.16,<2",
+  "onnxruntime>=1.18,<2",
+]
+dev = [
+  "pytest>=8.2,<9",
+]
+
+[project.scripts]
+cardscope-ml = "cardscope_ml.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cardscope_ml*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100

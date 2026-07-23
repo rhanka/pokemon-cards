@@ -1,0 +1,265 @@
+:root {
+  color-scheme: light;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  color: #17203a;
+  background: #f5f6fa;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --font-body:
+    Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  --font-display: "Avenir Next", Inter, ui-sans-serif, system-ui, sans-serif;
+  --ink: var(--st-semantic-text-primary, #17203a);
+  --muted: var(--st-semantic-text-secondary, #687187);
+  --surface: var(--st-semantic-surface-raised, #ffffff);
+  --surface-muted: var(--st-semantic-surface-subtle, #f4f5f8);
+  --line: var(--st-semantic-border-subtle, #e5e8f0);
+  --line-strong: var(--st-semantic-border-strong, #cbd0dc);
+  --primary: var(--st-semantic-action-primary, #514bdc);
+  --primary-soft: var(--st-semantic-action-secondary, #eeedff);
+  --accent: #e78445;
+  --success: #19865b;
+  --success-soft: #e8f7f0;
+  --warning: #a66214;
+  --warning-soft: #fff3df;
+  --danger: #c23f4d;
+  --danger-soft: #ffebee;
+  --shadow: 0 0.8rem 2rem rgba(24, 34, 66, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+html {
+  min-width: 320px;
+  min-height: 100%;
+  scroll-behavior: smooth;
+}
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background:
+    radial-gradient(
+      circle at 100% 0,
+      rgba(81, 75, 220, 0.055),
+      transparent 28rem
+    ),
+    #f7f8fb;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+button,
+label {
+  -webkit-tap-highlight-color: transparent;
+}
+button:not(:disabled),
+label:has(input) {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+button,
+a,
+input,
+select {
+  outline-offset: 3px;
+}
+:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--primary) 45%, transparent);
+}
+a {
+  color: inherit;
+}
+img {
+  display: block;
+  max-width: 100%;
+}
+
+.app-shell {
+  min-height: 100dvh;
+}
+.st-appChrome {
+  position: sticky;
+  z-index: 30;
+  top: 0;
+}
+.network-state {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2rem;
+  padding: 0 0.6rem;
+  color: var(--success);
+  border-radius: 2rem;
+  background: var(--success-soft);
+  font-size: 0.62rem;
+  font-weight: 800;
+}
+.network-state.offline {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+.online-dot {
+  width: 0.45rem;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 0.2rem rgba(25, 134, 91, 0.12);
+}
+.offline-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 2rem;
+  padding: 0.35rem 0.8rem;
+  color: var(--warning);
+  background: var(--warning-soft);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+main {
+  min-height: calc(100dvh - 5rem);
+}
+.page {
+  padding: 1rem 1rem calc(2rem + env(safe-area-inset-bottom));
+}
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 3.15rem;
+  padding: 0 0.85rem;
+  border: 1px solid transparent;
+  border-radius: 0.85rem;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+.button.primary {
+  color: white;
+  background: linear-gradient(135deg, #514bdc, #6569e8);
+  box-shadow: 0 0.5rem 1rem rgba(81, 75, 220, 0.18);
+}
+.button.secondary {
+  color: var(--ink);
+  border-color: var(--line);
+  background: var(--surface);
+}
+.button.ghost {
+  color: var(--muted);
+  background: transparent;
+}
+.button.light {
+  color: white;
+}
+.button.full {
+  width: 100%;
+}
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+.skip-link {
+  position: fixed;
+  z-index: 100;
+  top: 0.5rem;
+  left: 0.5rem;
+  padding: 0.65rem 0.8rem;
+  color: white;
+  border-radius: 0.5rem;
+  background: var(--ink);
+  transform: translateY(-150%);
+}
+.skip-link:focus {
+  transform: none;
+}
+.app-loading,
+.fatal-error {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 0.8rem;
+  min-height: 70dvh;
+  padding: 2rem;
+  text-align: center;
+}
+.app-loading span {
+  width: 2.4rem;
+  aspect-ratio: 1;
+  border: 3px solid var(--primary-soft);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: app-spin 0.8s linear infinite;
+}
+.app-loading strong {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.fatal-error p {
+  margin: 0;
+  color: var(--muted);
+}
+.fatal-error small {
+  color: var(--danger);
+}
+@keyframes app-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 767px) {
+  /* AppChrome 0.34.71 exposes its drawer at this breakpoint but its AppHeader
+     still renders the desktop nav. Keep the official drawer as the sole mobile nav. */
+  .st-appChrome .st-appHeader__nav {
+    display: none !important;
+  }
+}
+
+@media (min-width: 64rem) {
+  .offline-banner {
+    position: fixed;
+    z-index: 25;
+    top: 4.8rem;
+    right: 1rem;
+    width: auto;
+    border-radius: 0 0 0.6rem 0.6rem;
+  }
+  main {
+    min-width: 0;
+  }
+  .page {
+    padding: 2rem 2.5rem 4rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

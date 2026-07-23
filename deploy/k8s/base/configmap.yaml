@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pokemon-cards-config
+  labels:
+    app.kubernetes.io/name: pokemon-cards
+data:
+  HOST: "0.0.0.0"
+  PORT: "3000"
+  DATA_DIR: "/data"
+  PUBLIC_ORIGIN: "https://pokemon-cards.sent-tech.ca"
+  TCGDEX_BASE_URL: "https://api.tcgdex.net/v2"
+  TCGDEX_CATALOG_ENABLED: "false"
+  POKEMON_TCG_BASE_URL: "https://api.pokemontcg.io/v2"
+  POKEMON_TCG_CATALOG_ENABLED: "false"
+  CARD_IMAGES_ENABLED: "false"
+  MARKET_QUOTES_ENABLED: "false"
+  CATALOG_MAX_RESPONSE_BYTES: "2097152"
+  OIDC_ISSUER: "https://auth.sent-tech.ca"
+  OIDC_CLIENT_ID: "pokemon-cards"
+  OIDC_AUDIENCE: ""
+  OIDC_REQUIRED: "false"
+  SYNC_RETENTION_DAYS: "1826"

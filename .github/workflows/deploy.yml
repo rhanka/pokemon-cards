@@ -1,0 +1,136 @@
+name: Deploy Scaleway POC
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Full Git commit SHA associated with the published image
+        required: true
+        type: string
+
+permissions:
+  attestations: read
+  contents: read
+  packages: read
+
+concurrency:
+  group: pokemon-cards-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 0
+      - name: Validate release commit
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+        run: |
+          test "${#COMMIT_SHA}" -eq 40
+          printf '%s' "$COMMIT_SHA" | grep -Eq '^[0-9a-f]{40}$'
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$COMMIT_SHA" origin/main
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve and verify the published image
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          IMAGE_TAG="ghcr.io/rhanka/pokemon-cards:sha-${COMMIT_SHA}"
+          docker pull "$IMAGE_TAG"
+          REVISION="$(docker image inspect "$IMAGE_TAG" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
+          test "$REVISION" = "$COMMIT_SHA"
+          REPO_DIGEST="$(docker image inspect "$IMAGE_TAG" --format '{{ index .RepoDigests 0 }}')"
+          IMAGE_DIGEST="${REPO_DIGEST#*@}"
+          printf '%s' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          gh attestation verify "oci://ghcr.io/rhanka/pokemon-cards@${IMAGE_DIGEST}" --repo "$GITHUB_REPOSITORY"
+          printf 'IMAGE_DIGEST=%s\n' "$IMAGE_DIGEST" >> "$GITHUB_ENV"
+      - name: Configure namespace-scoped kubeconfig
+        env:
+          KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
+        run: |
+          test -n "$KUBE_CONFIG_DATA"
+          KUBE_CONFIG_FILE="$RUNNER_TEMP/pokemon-cards-kubeconfig"
+          if printf '%s' "$KUBE_CONFIG_DATA" | base64 -d 2>/dev/null | grep -q '^apiVersion:'; then
+            printf '%s' "$KUBE_CONFIG_DATA" | base64 -d > "$KUBE_CONFIG_FILE"
+          else
+            printf '%s' "$KUBE_CONFIG_DATA" > "$KUBE_CONFIG_FILE"
+          fi
+          chmod 600 "$KUBE_CONFIG_FILE"
+          printf 'KUBECONFIG=%s\n' "$KUBE_CONFIG_FILE" >> "$GITHUB_ENV"
+      - name: Render immutable image
+        run: |
+          sed -i "s|newTag: not-published|digest: ${IMAGE_DIGEST}|" deploy/k8s/overlays/prod/kustomization.yaml
+          RENDERED_MANIFEST="$RUNNER_TEMP/pokemon-cards.yaml"
+          kubectl kustomize deploy/k8s/overlays/prod > "$RENDERED_MANIFEST"
+          grep -F "image: ghcr.io/rhanka/pokemon-cards@${IMAGE_DIGEST}" "$RENDERED_MANIFEST"
+          printf 'RENDERED_MANIFEST=%s\n' "$RENDERED_MANIFEST" >> "$GITHUB_ENV"
+      - name: Preflight namespace, RBAC, and capacity
+        env:
+          CAPACITY_APPROVED_UNTIL: ${{ vars.CAPACITY_APPROVED_UNTIL }}
+        run: |
+          test -n "$CAPACITY_APPROVED_UNTIL"
+          if ! APPROVAL_EPOCH="$(date --utc --date="$CAPACITY_APPROVED_UNTIL" +%s 2>/dev/null)"; then
+            echo "CAPACITY_APPROVED_UNTIL must be an RFC 3339 timestamp" >&2
+            exit 1
+          fi
+          NOW_EPOCH="$(date --utc +%s)"
+          test "$APPROVAL_EPOCH" -gt "$NOW_EPOCH"
+          test "$APPROVAL_EPOCH" -le "$((NOW_EPOCH + 86400))"
+
+          test "$(kubectl config view --minify -o jsonpath='{..namespace}')" = "pokemon-cards"
+          kubectl -n pokemon-cards get serviceaccount pokemon-cards >/dev/null
+          kubectl auth can-i get deployments.apps -n pokemon-cards --quiet
+          kubectl auth can-i patch deployments.apps -n pokemon-cards --quiet
+          if kubectl auth can-i create namespaces --quiet; then
+            echo "Deployment credential must not create namespaces" >&2
+            exit 1
+          fi
+          if kubectl auth can-i create clusterrolebindings.rbac.authorization.k8s.io --quiet; then
+            echo "Deployment credential must not create cluster role bindings" >&2
+            exit 1
+          fi
+
+          cpu_millis() {
+            case "$1" in
+              "") printf '0\n' ;;
+              *m) printf '%s\n' "${1%m}" ;;
+              *) awk -v value="$1" 'BEGIN { printf "%.0f\n", value * 1000 }' ;;
+            esac
+          }
+          memory_mib() {
+            case "$1" in
+              "") printf '0\n' ;;
+              *Ki) awk -v value="${1%Ki}" 'BEGIN { printf "%.0f\n", value / 1024 }' ;;
+              *Mi) printf '%s\n' "${1%Mi}" ;;
+              *Gi) awk -v value="${1%Gi}" 'BEGIN { printf "%.0f\n", value * 1024 }' ;;
+              *) awk -v value="$1" 'BEGIN { printf "%.0f\n", value / 1048576 }' ;;
+            esac
+          }
+
+          HARD_CPU="$(kubectl -n pokemon-cards get resourcequota tenant-quota -o jsonpath='{.status.hard.requests\.cpu}')"
+          USED_CPU="$(kubectl -n pokemon-cards get resourcequota tenant-quota -o jsonpath='{.status.used.requests\.cpu}')"
+          HARD_MEMORY="$(kubectl -n pokemon-cards get resourcequota tenant-quota -o jsonpath='{.status.hard.requests\.memory}')"
+          USED_MEMORY="$(kubectl -n pokemon-cards get resourcequota tenant-quota -o jsonpath='{.status.used.requests\.memory}')"
+          test -n "$HARD_CPU"
+          test -n "$HARD_MEMORY"
+          CPU_REMAINING="$(( $(cpu_millis "$HARD_CPU") - $(cpu_millis "$USED_CPU") ))"
+          MEMORY_REMAINING="$(( $(memory_mib "$HARD_MEMORY") - $(memory_mib "$USED_MEMORY") ))"
+          test "$CPU_REMAINING" -ge 50
+          test "$MEMORY_REMAINING" -ge 128
+      - name: Server-side dry-run
+        run: kubectl apply --server-side --dry-run=server -f "$RENDERED_MANIFEST" -o name
+      - name: Apply and wait
+        run: |
+          kubectl apply -f "$RENDERED_MANIFEST"
+          kubectl -n pokemon-cards rollout status deployment/pokemon-cards --timeout=180s
+      - name: Smoke
+        run: curl --fail --show-error --silent --retry 8 --retry-delay 5 https://pokemon-cards.sent-tech.ca/api/health
