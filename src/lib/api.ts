@@ -14,6 +14,11 @@ import type {
 } from "./types";
 import { selectPriceQuote } from "./value";
 import { normalizeCurrency } from "./money";
+import {
+  CollectionMutationLockedError,
+  CollectionSyncGenerationFenceError,
+  isCollectionEvent,
+} from "./db";
 
 const defaultConfig: RuntimeConfig = {
   appName: "CardScope",
@@ -23,9 +28,17 @@ const defaultConfig: RuntimeConfig = {
     maxImageBytes: 2 * 1024 * 1024,
   },
   auth: { enabled: false, scope: "openid profile email" },
-  sync: { enabled: false, retentionDays: 1826 },
+  sync: {
+    enabled: false,
+    retentionDays: 1826,
+    maxBatchSize: 100,
+    maxOperationBytes: 64 * 1024,
+  },
   valuation: { marketQuotesEnabled: false },
 };
+const runtimeConfigCacheKey = "cardscope-runtime-config-v1";
+export const DEFAULT_SYNC_TIMEOUT_MS = 15_000;
+export const DEFAULT_SYNC_REQUEST_BUDGET_BYTES = 1_750_000;
 
 export class ApiRequestError extends Error {
   constructor(
@@ -33,10 +46,56 @@ export class ApiRequestError extends Error {
     readonly code: string | undefined,
     readonly retryAfterSeconds: number | undefined,
     message: string,
+    readonly currentGeneration?: string,
   ) {
     super(message);
     this.name = "ApiRequestError";
   }
+}
+
+export class SyncProtocolError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SyncProtocolError";
+  }
+}
+
+export class SyncBatchSizeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SyncBatchSizeError";
+  }
+}
+
+export function isRetryableSyncError(error: unknown): boolean {
+  if (error instanceof ApiRequestError) {
+    return (
+      error.status === 408 ||
+      error.status === 425 ||
+      error.status === 429 ||
+      error.status === 500 ||
+      error.status === 502 ||
+      error.status === 503 ||
+      error.status === 504
+    );
+  }
+  if (
+    error instanceof SyncProtocolError ||
+    error instanceof SyncBatchSizeError
+  ) {
+    return false;
+  }
+  if (error instanceof DOMException) {
+    return error.name === "TimeoutError";
+  }
+  // fetch rejects transport failures as TypeError in browsers.
+  if (error instanceof TypeError) return true;
+  if (
+    error instanceof CollectionMutationLockedError ||
+    error instanceof CollectionSyncGenerationFenceError
+  )
+    return true;
+  return false;
 }
 
 async function apiFetch(
@@ -54,11 +113,16 @@ async function apiFetch(
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     let code: string | undefined;
+    let currentGeneration: string | undefined;
     let message = `Request failed (${response.status})`;
     try {
       const parsed = object(JSON.parse(detail));
       const apiError = object(parsed.error);
       code = string(apiError.code);
+      currentGeneration = positiveSafeIntegerString(
+        apiError.currentGeneration,
+        false,
+      );
       message = string(apiError.message) ?? message;
     } catch {
       if (detail) message = detail;
@@ -69,6 +133,7 @@ async function apiFetch(
       code,
       Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
       message,
+      currentGeneration,
     );
   }
   return response;
@@ -82,6 +147,26 @@ function object(value: unknown): Record<string, unknown> {
 
 function string(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function positiveSafeIntegerString(
+  value: unknown,
+  allowZero: boolean,
+): string | undefined {
+  const pattern = allowZero ? /^(0|[1-9]\d*)$/ : /^[1-9]\d*$/;
+  if (typeof value !== "string" || !pattern.test(value)) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && (allowZero ? parsed >= 0 : parsed > 0)
+    ? value
+    : undefined;
+}
+
+function positiveSafeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? value
+    : undefined;
 }
 
 function numberOrNull(value: unknown): number | null {
@@ -215,22 +300,41 @@ function sanitizeRemoteCollectionEvent(
   const occurredAt = string(event.occurredAt);
   const deviceId = string(event.deviceId);
   const type = string(event.type);
+  const serverSequence = positiveSafeInteger(event.sequence);
+  const receivedAt = string(event.receivedAt);
   if (
     !id ||
     !holdingId ||
     !occurredAt ||
     !deviceId ||
+    serverSequence === undefined ||
+    !receivedAt ||
+    !isIsoTimestamp(receivedAt) ||
     !event.payload ||
     typeof event.payload !== "object"
   ) {
     return null;
   }
   const payload = object(event.payload);
-  const base = { id, holdingId, occurredAt, deviceId, syncedAt };
+  const base = {
+    id,
+    holdingId,
+    occurredAt,
+    deviceId,
+    serverSequence,
+    syncedAt,
+  };
+  let sanitized: CollectionEvent;
   switch (type) {
     case "holding.added":
-      if (!payload.holding || typeof payload.holding !== "object") return null;
-      return {
+      if (
+        !hasOnlyObjectKeys(payload, ["holding"]) ||
+        !payload.holding ||
+        typeof payload.holding !== "object"
+      ) {
+        return null;
+      }
+      sanitized = {
         ...base,
         type,
         payload: {
@@ -240,10 +344,28 @@ function sanitizeRemoteCollectionEvent(
           >["payload"]["holding"],
         },
       };
+      break;
     case "holding.quantity-adjusted":
-      if (typeof payload.delta !== "number") return null;
-      return { ...base, type, payload: { delta: payload.delta } };
+      if (
+        !hasOnlyObjectKeys(payload, ["delta"]) ||
+        typeof payload.delta !== "number"
+      ) {
+        return null;
+      }
+      sanitized = { ...base, type, payload: { delta: payload.delta } };
+      break;
     case "holding.updated": {
+      if (
+        !hasOnlyObjectKeys(payload, [
+          "finish",
+          "condition",
+          "unitCost",
+          "note",
+          "quote",
+        ])
+      ) {
+        return null;
+      }
       const update: Extract<
         CollectionEvent,
         { type: "holding.updated" }
@@ -257,17 +379,85 @@ function sanitizeRemoteCollectionEvent(
       if ("note" in payload) update.note = payload.note as typeof update.note;
       if ("quote" in payload)
         update.quote = payload.quote as typeof update.quote;
-      return { ...base, type, payload: update };
+      sanitized = { ...base, type, payload: update };
+      break;
     }
     case "holding.removed":
-      return {
+      if (
+        !hasOnlyObjectKeys(payload, ["reason"]) ||
+        ("reason" in payload && typeof payload.reason !== "string")
+      ) {
+        return null;
+      }
+      sanitized = {
         ...base,
         type,
         payload:
           typeof payload.reason === "string" ? { reason: payload.reason } : {},
       };
+      break;
     default:
       return null;
+  }
+  return isCollectionEvent(sanitized) ? sanitized : null;
+}
+
+function parseRuntimeConfig(input: unknown): RuntimeConfig {
+  const raw = object(input);
+  const auth = object(raw.auth ?? raw.oidc);
+  const recognition = object(raw.recognition);
+  const sync = object(raw.sync);
+  const valuation = object(raw.valuation);
+  return {
+    appName: string(raw.appName ?? raw.app_name) ?? defaultConfig.appName,
+    recognition: {
+      enabled:
+        recognition.enabled === undefined
+          ? defaultConfig.recognition.enabled
+          : Boolean(recognition.enabled),
+      processing: "server",
+      maxImageBytes:
+        typeof recognition.maxImageBytes === "number"
+          ? recognition.maxImageBytes
+          : typeof recognition.max_image_bytes === "number"
+            ? recognition.max_image_bytes
+            : defaultConfig.recognition.maxImageBytes,
+    },
+    auth: {
+      enabled: Boolean(auth.enabled),
+      issuer: string(auth.issuer ?? auth.authority),
+      clientId: string(auth.clientId ?? auth.client_id),
+      audience: string(auth.audience),
+      scope: string(auth.scope) ?? defaultConfig.auth.scope,
+    },
+    sync: {
+      enabled: Boolean(sync.enabled ?? auth.enabled),
+      retentionDays:
+        typeof sync.retentionDays === "number"
+          ? sync.retentionDays
+          : typeof sync.retention_days === "number"
+            ? sync.retention_days
+            : defaultConfig.sync.retentionDays,
+      maxBatchSize:
+        positiveSafeInteger(sync.maxBatchSize ?? sync.max_batch_size) ??
+        defaultConfig.sync.maxBatchSize,
+      maxOperationBytes:
+        positiveSafeInteger(
+          sync.maxOperationBytes ?? sync.max_operation_bytes,
+        ) ?? defaultConfig.sync.maxOperationBytes,
+    },
+    valuation: {
+      marketQuotesEnabled: Boolean(valuation.marketQuotesEnabled),
+    },
+  };
+}
+
+function cachedRuntimeConfig(): RuntimeConfig | null {
+  try {
+    const cached = localStorage.getItem(runtimeConfigCacheKey);
+    return cached ? parseRuntimeConfig(JSON.parse(cached)) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -276,57 +466,24 @@ export async function loadRuntimeConfig(): Promise<RuntimeConfig> {
     const response = await apiFetch("/api/config", {
       signal: AbortSignal.timeout(3_500),
     });
-    const raw = object(await response.json());
-    const auth = object(raw.auth ?? raw.oidc);
-    const recognition = object(raw.recognition);
-    const sync = object(raw.sync);
-    const valuation = object(raw.valuation);
-    return {
-      appName: string(raw.appName ?? raw.app_name) ?? defaultConfig.appName,
-      recognition: {
-        enabled:
-          recognition.enabled === undefined
-            ? defaultConfig.recognition.enabled
-            : Boolean(recognition.enabled),
-        processing: "server",
-        maxImageBytes:
-          typeof recognition.maxImageBytes === "number"
-            ? recognition.maxImageBytes
-            : typeof recognition.max_image_bytes === "number"
-              ? recognition.max_image_bytes
-              : defaultConfig.recognition.maxImageBytes,
-      },
-      auth: {
-        enabled: Boolean(auth.enabled),
-        issuer: string(auth.issuer ?? auth.authority),
-        clientId: string(auth.clientId ?? auth.client_id),
-        audience: string(auth.audience),
-        scope: string(auth.scope) ?? defaultConfig.auth.scope,
-      },
-      sync: {
-        enabled: Boolean(sync.enabled ?? auth.enabled),
-        retentionDays:
-          typeof sync.retentionDays === "number"
-            ? sync.retentionDays
-            : typeof sync.retention_days === "number"
-              ? sync.retention_days
-              : defaultConfig.sync.retentionDays,
-      },
-      valuation: {
-        marketQuotesEnabled: Boolean(valuation.marketQuotesEnabled),
-      },
-    };
+    const config = parseRuntimeConfig(await response.json());
+    try {
+      localStorage.setItem(runtimeConfigCacheKey, JSON.stringify(config));
+    } catch {
+      // Public configuration caching is a progressive offline enhancement.
+    }
+    return config;
   } catch {
-    return defaultConfig;
+    return cachedRuntimeConfig() ?? defaultConfig;
   }
 }
 
 export async function recognizeCardImage(
   image: Blob,
-  cardLanguage: CatalogLanguage,
+  locale: Locale,
   signal?: AbortSignal,
 ): Promise<ServerRecognitionResult> {
-  const params = new URLSearchParams({ language: cardLanguage });
+  const params = new URLSearchParams({ language: "auto" });
   const deadline = AbortSignal.timeout(40_000);
   const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
   const response = await apiFetch(
@@ -345,14 +502,14 @@ export async function recognizeCardImage(
   return {
     ...raw,
     cards: (Array.isArray(raw.cards) ? raw.cards : [])
-      .map((card) => normalizeCard(card, cardLanguage))
+      .map((card) => normalizeCard(card, locale))
       .filter((card): card is CatalogCard => card !== null),
   };
 }
 
 export async function searchCatalog(
   parsed: ParsedCardText,
-  cardLanguage: CatalogLanguage,
+  cardLanguage: CatalogLanguage | "auto",
   locale: Locale,
   signal?: AbortSignal,
   valuationPreference?: ValuationPreference,
@@ -360,7 +517,7 @@ export async function searchCatalog(
   const params = new URLSearchParams({
     q: parsed.query,
     language: cardLanguage,
-    limit: "12",
+    limit: cardLanguage === "auto" ? "24" : "12",
   });
   const response = await apiFetch(`/api/catalog/cards?${params.toString()}`, {
     signal: signal ?? AbortSignal.timeout(8_000),
@@ -379,7 +536,11 @@ export async function searchCatalog(
   return values
     .map((card) => normalizeCard(card, locale, valuationPreference))
     .filter((card): card is CatalogCard => card !== null)
-    .map((card) => ({ ...card, language: card.language ?? cardLanguage }));
+    .map((card) => ({
+      ...card,
+      language:
+        card.language ?? (cardLanguage === "auto" ? undefined : cardLanguage),
+    }));
 }
 
 export async function getCatalogCard(
@@ -410,41 +571,205 @@ export async function syncCollectionEvents(
   events: CollectionEvent[],
   session: OidcSession,
   cursor?: string | null,
+  generation?: string | null,
+  options: {
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    requireEmpty?: boolean;
+  } = {},
 ): Promise<{
   acceptedIds: string[];
   remoteEvents: CollectionEvent[];
   cursor: string;
   hasMore: boolean;
+  generation: string;
 }> {
+  const normalizedCursor =
+    cursor === undefined || cursor === null
+      ? null
+      : positiveSafeIntegerString(cursor, true);
+  const normalizedGeneration =
+    generation === undefined || generation === null
+      ? null
+      : positiveSafeIntegerString(generation, false);
+  if (cursor !== undefined && cursor !== null && normalizedCursor === undefined)
+    throw new SyncProtocolError("Sync cursor is invalid");
+  if (
+    generation !== undefined &&
+    generation !== null &&
+    normalizedGeneration === undefined
+  )
+    throw new SyncProtocolError("Sync generation is invalid");
+  const operationIds = events.map((event) => event.id);
+  if (
+    operationIds.some((id) => !id) ||
+    new Set(operationIds).size !== operationIds.length
+  ) {
+    throw new SyncProtocolError(
+      "Sync operation ids must be non-empty and unique",
+    );
+  }
+  const requestBody: Record<string, unknown> = {
+    cursor: normalizedCursor,
+    generation: normalizedGeneration,
+    operations: events.map(operationForSync),
+  };
+  if (options.requireEmpty) requestBody.requireEmpty = true;
   const response = await apiFetch(
     "/api/sync",
     {
       method: "POST",
-      body: JSON.stringify({ cursor: cursor ?? null, operations: events }),
+      body: JSON.stringify(requestBody),
+      signal: syncRequestSignal(options.signal, options.timeoutMs),
     },
     session,
   );
-  const body = object(await response.json());
-  const accepted =
-    body.acceptedOperationIds ?? body.acceptedIds ?? body.accepted_ids;
-  const remote = body.events ?? body.remoteEvents ?? body.remote_events;
+  const body = await strictJsonObject(response, "Sync response");
+  const accepted = body.acceptedOperationIds;
+  const remote = body.events;
+  const responseCursor = positiveSafeIntegerString(body.cursor, true);
+  const responseGeneration = positiveSafeIntegerString(body.generation, false);
+  if (
+    !Array.isArray(accepted) ||
+    !accepted.every((id) => typeof id === "string" && id.length > 0) ||
+    new Set(accepted).size !== accepted.length ||
+    !sameStringSet(accepted, operationIds)
+  ) {
+    throw new SyncProtocolError(
+      "Sync response must acknowledge exactly the submitted operations",
+    );
+  }
+  if (!Array.isArray(remote))
+    throw new SyncProtocolError("Sync response events are invalid");
+  if (!responseCursor)
+    throw new SyncProtocolError("Sync response cursor is invalid");
+  if (!responseGeneration)
+    throw new SyncProtocolError("Sync response generation is invalid");
+  if (typeof body.hasMore !== "boolean")
+    throw new SyncProtocolError("Sync response pagination flag is invalid");
+  if (
+    typeof body.retentionUntil !== "string" ||
+    !isIsoTimestamp(body.retentionUntil)
+  ) {
+    throw new SyncProtocolError("Sync response retention deadline is invalid");
+  }
   const syncedAt = new Date().toISOString();
+  const remoteEvents = remote.map((value) =>
+    sanitizeRemoteCollectionEvent(value, syncedAt),
+  );
+  if (remoteEvents.some((event) => event === null))
+    throw new SyncProtocolError("Sync response contains an invalid event");
   return {
-    acceptedIds: Array.isArray(accepted)
-      ? accepted.filter((id): id is string => typeof id === "string")
-      : [],
-    remoteEvents: Array.isArray(remote)
-      ? remote
-          .map((value) => sanitizeRemoteCollectionEvent(value, syncedAt))
-          .filter((event): event is CollectionEvent => event !== null)
-      : [],
-    cursor: string(body.cursor) ?? cursor ?? "0",
-    hasMore: Boolean(body.hasMore ?? body.has_more),
+    acceptedIds: accepted,
+    remoteEvents: remoteEvents as CollectionEvent[],
+    cursor: responseCursor,
+    hasMore: body.hasMore,
+    generation: responseGeneration,
   };
 }
 
 export async function deleteCloudCollection(
   session: OidcSession,
-): Promise<void> {
-  await apiFetch("/api/sync", { method: "DELETE" }, session);
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<{ generation: string }> {
+  const response = await apiFetch(
+    "/api/sync",
+    {
+      method: "DELETE",
+      signal: syncRequestSignal(options.signal, options.timeoutMs),
+    },
+    session,
+  );
+  const body = await strictJsonObject(response, "Sync deletion response");
+  const generation = positiveSafeIntegerString(body.generation, false);
+  if (!generation || body.deleted !== true)
+    throw new SyncProtocolError("Sync deletion response is invalid");
+  return { generation };
+}
+
+export function selectSyncEventBatch(
+  events: CollectionEvent[],
+  maxEvents = 100,
+  maxRequestBytes = DEFAULT_SYNC_REQUEST_BUDGET_BYTES,
+): CollectionEvent[] {
+  if (!Number.isSafeInteger(maxEvents) || maxEvents <= 0)
+    throw new RangeError("maxEvents must be a positive safe integer");
+  if (!Number.isSafeInteger(maxRequestBytes) || maxRequestBytes <= 0)
+    throw new RangeError("maxRequestBytes must be a positive safe integer");
+  const selected: CollectionEvent[] = [];
+  for (const event of events) {
+    if (selected.length >= maxEvents) break;
+    const candidate = [...selected, event];
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        cursor: String(Number.MAX_SAFE_INTEGER),
+        generation: String(Number.MAX_SAFE_INTEGER),
+        requireEmpty: true,
+        operations: candidate.map(operationForSync),
+      }),
+    ).byteLength;
+    if (bytes <= maxRequestBytes) {
+      selected.push(event);
+      continue;
+    }
+    if (selected.length === 0) {
+      throw new SyncBatchSizeError(
+        `Sync operation ${event.id} exceeds the request byte budget`,
+      );
+    }
+    break;
+  }
+  return selected;
+}
+
+function operationForSync(event: CollectionEvent): CollectionEvent {
+  const operation = { ...event };
+  delete operation.serverSequence;
+  delete operation.syncedAt;
+  return operation;
+}
+
+function syncRequestSignal(
+  signal: AbortSignal | undefined,
+  timeoutMs = DEFAULT_SYNC_TIMEOUT_MS,
+): AbortSignal {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)
+    throw new RangeError("Sync timeout must be a positive safe integer");
+  const deadline = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, deadline]) : deadline;
+}
+
+async function strictJsonObject(
+  response: Response,
+  label: string,
+): Promise<Record<string, unknown>> {
+  let value: unknown;
+  try {
+    value = await response.json();
+  } catch {
+    throw new SyncProtocolError(`${label} is not valid JSON`);
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new SyncProtocolError(`${label} is invalid`);
+  return value as Record<string, unknown>;
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const expected = new Set(right);
+  return left.every((value) => expected.has(value));
+}
+
+function isIsoTimestamp(value: string): boolean {
+  const timestamp = Date.parse(value);
+  return (
+    Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value
+  );
+}
+
+function hasOnlyObjectKeys(
+  value: Record<string, unknown>,
+  allowed: string[],
+): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
 }

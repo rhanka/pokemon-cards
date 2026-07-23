@@ -104,9 +104,11 @@ describe("OIDC runtime configuration", () => {
     expect(
       loadConfig({
         OIDC_REQUIRED: "true",
+        ACCOUNT_IDENTITY_READY: "true",
+        ACCOUNT_RECOVERY_READY: "true",
         OIDC_ISSUER: "http://127.0.0.1:8080",
         OIDC_JWKS_URI: "http://localhost:8080/jwks.json",
-        OIDC_AUDIENCE: "cardscope-api",
+        OIDC_AUDIENCE: "http://127.0.0.1:8787/api",
       }).oidc,
     ).toMatchObject({
       issuer: "http://127.0.0.1:8080",
@@ -126,16 +128,48 @@ describe("OIDC runtime configuration", () => {
   it("publishes the exact configured audience to the public client", () => {
     const config = loadConfig({
       OIDC_REQUIRED: "true",
+      ACCOUNT_IDENTITY_READY: "true",
+      ACCOUNT_RECOVERY_READY: "true",
       OIDC_ISSUER: "https://auth.example.test",
       OIDC_CLIENT_ID: "cardscope-public",
-      OIDC_AUDIENCE: "cardscope-api",
+      OIDC_AUDIENCE: "https://api.example.test/cardscope",
     });
 
     expect(toPublicConfig(config).auth).toEqual({
       enabled: true,
       issuer: "https://auth.example.test",
       clientId: "cardscope-public",
-      audience: "cardscope-api",
+      audience: "https://api.example.test/cardscope",
     });
+  });
+
+  it("requires an absolute fragment-free RFC 8707 resource URI", () => {
+    expect(() => loadConfig({ OIDC_AUDIENCE: "cardscope-api" })).toThrow(
+      "OIDC_AUDIENCE must be an absolute URI without a fragment",
+    );
+    expect(() =>
+      loadConfig({
+        OIDC_AUDIENCE: "https://api.example.test/cardscope#collection",
+      }),
+    ).toThrow("OIDC_AUDIENCE must be an absolute URI without a fragment");
+    expect(() =>
+      loadConfig({
+        OIDC_AUDIENCE: "https://api.example.test/cardscope#",
+      }),
+    ).toThrow("OIDC_AUDIENCE must be an absolute URI without a fragment");
+  });
+
+  it("requires explicit identity and recovery readiness before account activation", () => {
+    const base = {
+      OIDC_REQUIRED: "true",
+      OIDC_ISSUER: "https://auth.example.test",
+      OIDC_AUDIENCE: "https://api.example.test/cardscope",
+    };
+    expect(() => loadConfig(base)).toThrow(
+      "ACCOUNT_IDENTITY_READY=true is required",
+    );
+    expect(() =>
+      loadConfig({ ...base, ACCOUNT_IDENTITY_READY: "true" }),
+    ).toThrow("ACCOUNT_RECOVERY_READY=true is required");
   });
 });

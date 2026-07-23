@@ -51,8 +51,8 @@ function renderReport(report: EconomicsReport): string {
       `    API optimisée ${fixed(scenario.monthlyOptimizedRequests, 0)} req (${fixed(scenario.averageOptimizedRps, 4)} RPS moyen)`,
       `    OCR ${fixed(scenario.averageRecognitionMcpu)}m moyen / ${fixed(scenario.peakRecognitionMcpu)}m pointe ×20; limit=${scenario.peakExceedsCpuLimit ? "DÉPASSÉE" : "OK"}`,
       `    Upstream ${fixed(scenario.monthlyUpstreamCalls, 0)}/mois, cache ${fixed(scenario.catalogueCacheHitRate * 100, 0)}%`,
-      `    Stockage Cloud Pass ${fixed(scenario.paidStorage.primaryGiB)} GiB primaire / ${fixed(scenario.paidStorage.totalWithBackupsGiB)} GiB avec sauvegardes`,
-      `    Stockage si 100% cloud ${fixed(scenario.allAccountStorage.primaryGiB)} GiB primaire`,
+      `    Stockage central (tous les comptes) ${fixed(scenario.allAccountStorage.primaryGiB)} GiB primaire / ${fixed(scenario.allAccountStorage.totalWithBackupsGiB)} GiB avec sauvegardes`,
+      `    Sous-ensemble payant ${fixed(scenario.paidStorage.primaryGiB)} GiB primaire (projection analytique, pas une gate de stockage)`,
       `    Coût CPU partagé alloué $${fixed(scenario.allocatedComputeCostUsd)} / ${inputs.years} ans`,
       `    Plafond théorique stockage $${fixed(scenario.maximumBlendedStorageUsdPerGiBMonth, 3)}/GiB-mois avant egress/observabilité`,
     );

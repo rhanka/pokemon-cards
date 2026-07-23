@@ -51,6 +51,8 @@ describe("economics simulator", () => {
     expect(base?.allAccountStorage.normalizedEventBytes).toBe(950_000_000);
     expect(base?.paidStorage.primaryGiB).toBeLessThan(1);
     expect(base?.allAccountStorage.primaryGiB).toBeGreaterThan(1);
+    expect(base?.monthlyOptimizedRequests).toBe(11_000);
+    expect(base?.maximumBlendedStorageUsdPerGiBMonth).toBeLessThan(1);
   });
 
   it("should preserve the five-year price and maximum-markup guardrail", () => {

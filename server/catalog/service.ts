@@ -48,6 +48,39 @@ function cacheDate(now: Date, milliseconds: number): string {
   return new Date(now.getTime() + milliseconds).toISOString();
 }
 
+function abortReason(signal: AbortSignal): unknown {
+  return (
+    signal.reason ??
+    new DOMException("Catalogue request was cancelled", "AbortError")
+  );
+}
+
+function waitForCaller<T>(
+  operation: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return operation;
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(abortReason(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 function searchKey(
   query: string,
   language: CardLanguage,
@@ -221,7 +254,9 @@ export class CatalogueService {
     query: string,
     language: CardLanguage,
     limit = 20,
+    signal?: AbortSignal,
   ): Promise<CatalogueSearchResult> {
+    if (signal?.aborted) throw abortReason(signal);
     this.ensureCatalogueEnabled();
     const now = this.clock();
     const key = searchKey(query, language, limit, this.cachePolicy);
@@ -245,7 +280,7 @@ export class CatalogueService {
 
     const pending = this.inFlight.get(key) as
       Promise<CatalogueSearchResult> | undefined;
-    if (pending) return pending;
+    if (pending) return waitForCaller(pending, signal);
 
     const request = this.fetchSearch(
       query,
@@ -258,7 +293,7 @@ export class CatalogueService {
       this.inFlight.delete(key);
     });
     this.inFlight.set(key, request);
-    return request;
+    return waitForCaller(request, signal);
   }
 
   private async fetchSearch(

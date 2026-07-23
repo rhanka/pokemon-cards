@@ -153,6 +153,13 @@ export type SyncOperation =
 
 export interface SyncRequest {
   cursor?: string | null;
+  generation: string | null;
+  /**
+   * Atomic enrollment guard. When true, the server accepts the request only
+   * if the account event log is empty, or every operation in this exact retry
+   * was already accepted with identical immutable content.
+   */
+  requireEmpty?: boolean;
   operations: SyncOperation[];
 }
 
@@ -164,6 +171,7 @@ export type SyncEvent = SyncOperation & {
 export interface SyncResponse {
   acceptedOperationIds: string[];
   cursor: string;
+  generation: string;
   events: SyncEvent[];
   hasMore: boolean;
   retentionUntil: string;
@@ -232,6 +240,7 @@ export interface PublicAppConfig {
     enabled: boolean;
     retentionDays: number;
     maxBatchSize: number;
+    maxOperationBytes: number;
   };
   catalogue: {
     languages: CardLanguage[];

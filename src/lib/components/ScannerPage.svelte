@@ -60,7 +60,6 @@
   let selected = $state<RecognitionCandidate>();
   let finish = $state<CardFinish | "">("");
   let condition = $state<CardCondition | "">("");
-  let cardLanguage = $state<CatalogLanguage | "">("");
   let cost = $state("");
   let costCurrency = $state("");
   let manualQuery = $state("");
@@ -84,7 +83,6 @@
     "played",
     "poor",
   ];
-  const cardLanguages: CatalogLanguage[] = ["en", "fr"];
   const selectedQuote = $derived(
     selected && finish && condition
       ? selectPriceQuote(
@@ -106,18 +104,26 @@
   const canAdd = $derived(
     Boolean(
       selected &&
-      cardLanguage &&
+      catalogLanguage(selected.language) &&
       finish &&
       condition &&
       (!cost || costCurrency),
     ),
   );
 
-  function selectedCardLanguage(): CatalogLanguage | null {
-    if (cardLanguage) return cardLanguage;
-    errorMessage = translate(locale, "scanner.languageRequired");
-    stage = "error";
-    return null;
+  function catalogLanguage(
+    language: RecognitionCandidate["language"],
+  ): CatalogLanguage | null {
+    return language === "en" || language === "fr" ? language : null;
+  }
+
+  function cardLanguageLabel(
+    language: RecognitionCandidate["language"],
+  ): string {
+    const supported = catalogLanguage(language);
+    return supported
+      ? translate(locale, `language.${supported}` as TranslationKey)
+      : (language?.toUpperCase() ?? "—");
   }
 
   function scanFailureMessage(error: unknown): string {
@@ -151,7 +157,6 @@
   }
 
   async function startCamera(): Promise<void> {
-    if (!selectedCardLanguage()) return;
     errorMessage = "";
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -212,7 +217,7 @@
     const input = event.currentTarget as HTMLInputElement;
     const file = input.files?.[0];
     input.value = "";
-    if (file && selectedCardLanguage()) await processImage(file);
+    if (file) await processImage(file);
   }
 
   function replacePreview(blob: Blob): void {
@@ -247,7 +252,7 @@
       }
       const recognition = await recognizeCardImage(
         prepared,
-        cardLanguage === "fr" ? "fr" : "en",
+        locale,
         controller.signal,
       );
       if (attempt !== recognitionAttempt || controller.signal.aborted) return;
@@ -281,8 +286,6 @@
     signal?: AbortSignal,
     attempt = recognitionAttempt,
   ): Promise<void> {
-    const language = selectedCardLanguage();
-    if (!language) return;
     if (!online) {
       errorMessage = translate(locale, "scanner.offlineSearch");
       stage = "error";
@@ -292,7 +295,7 @@
     try {
       const cards = await searchCatalog(
         text,
-        language,
+        "auto",
         locale,
         signal,
         valuationPreference,
@@ -321,7 +324,6 @@
 
   async function manualSearch(event: SubmitEvent): Promise<void> {
     event.preventDefault();
-    if (!selectedCardLanguage()) return;
     const text = parseCardText(manualQuery);
     const fraction = manualQuery.match(
       /\b([A-Z]{0,4}\d{1,3}[A-Z]?)\s*\/\s*([A-Z]{0,4}\d{1,3})\b/i,
@@ -350,8 +352,12 @@
   async function chooseCandidate(
     candidate: RecognitionCandidate,
   ): Promise<void> {
-    const language = selectedCardLanguage();
-    if (!language) return;
+    const language = catalogLanguage(candidate.language);
+    if (!language) {
+      errorMessage = translate(locale, "scanner.error");
+      stage = "error";
+      return;
+    }
     stage = "hydrate";
     try {
       const hydrated = await getCatalogCard(candidate.id, language, locale, {
@@ -377,9 +383,10 @@
   }
 
   async function addSelected(): Promise<void> {
+    const language = catalogLanguage(selected?.language);
     if (
       !selected ||
-      !cardLanguage ||
+      !language ||
       !finish ||
       !condition ||
       (cost && !costCurrency)
@@ -389,7 +396,7 @@
     }
     const parsedCost = Number.parseFloat(cost);
     await onAdd({
-      card: { ...selected, language: cardLanguage, quote: selectedQuote },
+      card: { ...selected, language, quote: selectedQuote },
       finish,
       condition,
       quote: selectedQuote,
@@ -430,7 +437,7 @@
   <header class="hero">
     <div>
       <span class="eyebrow"
-        ><Icon name="shield" size={16} />
+        ><Icon name="sparkle" size={16} />
         {translate(locale, "scanner.eyebrow")}</span
       >
       <h1 id="scanner-title">{translate(locale, "scanner.title")}</h1>
@@ -481,24 +488,6 @@
       </div>
     {/if}
 
-    <fieldset class="language-picker">
-      <legend>{translate(locale, "scanner.cardLanguage")}</legend>
-      <p>{translate(locale, "scanner.cardLanguageHelp")}</p>
-      <div class="choice-grid language-grid">
-        {#each cardLanguages as item (item)}
-          <label class:chosen={cardLanguage === item}>
-            <input
-              type="radio"
-              name="card-language"
-              value={item}
-              bind:group={cardLanguage}
-            />
-            {translate(locale, `language.${item}` as TranslationKey)}
-          </label>
-        {/each}
-      </div>
-    </fieldset>
-
     <Card class="scan-card">
       <div class="scan-illustration" aria-hidden="true">
         <div class="card-back"><span class="scan-lens"></span></div>
@@ -507,16 +496,11 @@
         </div>
       </div>
       <div class="scan-actions">
-        <Button
-          size="lg"
-          class="scan-main"
-          onclick={startCamera}
-          disabled={!cardLanguage}
-        >
+        <Button size="lg" class="scan-main" onclick={startCamera}>
           <Icon name="camera" />
           {translate(locale, "scanner.camera")}
         </Button>
-        <label class:disabled={!cardLanguage} class="button secondary">
+        <label class="button secondary">
           <Icon name="image" />
           {translate(locale, "scanner.photo")}
           <input
@@ -524,14 +508,9 @@
             accept="image/jpeg,image/png,image/webp"
             capture="environment"
             onchange={chooseFile}
-            disabled={!cardLanguage}
           />
         </label>
       </div>
-      <p class="privacy-note">
-        <Icon name="shield" size={15} />
-        {translate(locale, "scanner.privacy")}
-      </p>
     </Card>
 
     <form class="manual-search" onsubmit={manualSearch}>
@@ -543,7 +522,7 @@
         placeholder="Pikachu 025/165"
         required
       />
-      <Button type="submit" size="lg" disabled={!online || !cardLanguage}
+      <Button type="submit" size="lg" disabled={!online}
         ><Icon name="search" size={18} />
         {translate(locale, "scanner.search")}</Button
       >
@@ -633,7 +612,7 @@
                 <span
                   >{candidate.setName ?? "—"} · {candidate.printedNumber ??
                     candidate.number ??
-                    "—"}</span
+                    "—"} · {cardLanguageLabel(candidate.language)}</span
                 >
                 {#if candidate.quote}
                   <b
@@ -666,9 +645,8 @@
           />{/if}
         <div>
           <span
-            >{selected.setName} · {selected.printedNumber ?? selected.number} · {translate(
-              locale,
-              `language.${cardLanguage}` as TranslationKey,
+            >{selected.setName} · {selected.printedNumber ?? selected.number} · {cardLanguageLabel(
+              selected.language,
             )}</span
           >
           <h2>{selected.name}</h2>
@@ -788,36 +766,11 @@
     border-radius: 50%;
     transform: rotate(7deg);
   }
-  .language-picker {
-    display: grid;
-    gap: 0.35rem;
-    margin: 0 0 0.85rem;
-    padding: 0.8rem;
-    border: 1px solid var(--line);
-    border-radius: 1rem;
-    background: var(--surface);
-  }
-  .language-picker legend {
-    padding: 0 0.25rem;
-  }
-  .language-picker p {
-    margin: 0 0 0.25rem;
-    color: var(--muted);
-    font-size: 0.72rem;
-    line-height: 1.4;
-  }
-  .language-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
   :global(.scan-card) {
     padding: 1rem;
     border-radius: 1.6rem;
-    background: linear-gradient(
-      150deg,
-      rgba(255, 255, 255, 0.96),
-      rgba(246, 248, 255, 0.96)
-    );
-    box-shadow: var(--shadow);
+    background: var(--st-semantic-surface-raised);
+    box-shadow: var(--st-component-card-shadow);
   }
   .scan-illustration {
     position: relative;
@@ -826,23 +779,15 @@
     min-height: 19rem;
     overflow: hidden;
     border-radius: 1rem;
-    background:
-      radial-gradient(
-        circle at 50% 48%,
-        rgba(255, 255, 255, 0.15) 0 13%,
-        transparent 14%
-      ),
-      linear-gradient(145deg, #172445, #263961);
+    background: var(--st-semantic-surface-inverse);
   }
   .scan-illustration::before {
     content: "";
     position: absolute;
     inset: 0;
-    opacity: 0.22;
-    background-image:
-      linear-gradient(rgba(255, 255, 255, 0.12) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255, 255, 255, 0.12) 1px, transparent 1px);
-    background-size: 28px 28px;
+    border: 1px solid
+      color-mix(in srgb, var(--st-semantic-text-inverse) 16%, transparent);
+    border-radius: inherit;
   }
   .card-back {
     position: relative;
@@ -850,23 +795,19 @@
     place-items: center;
     width: 8.6rem;
     aspect-ratio: 2.5/3.5;
-    border: 5px solid rgba(255, 255, 255, 0.82);
+    border: 5px solid
+      color-mix(in srgb, var(--st-semantic-text-inverse) 84%, transparent);
     border-radius: 0.7rem;
-    background:
-      linear-gradient(145deg, rgba(123, 119, 255, 0.98), #3d347c 70%),
-      repeating-linear-gradient(
-        45deg,
-        transparent 0 12px,
-        rgba(255, 255, 255, 0.12) 12px 14px
-      );
-    box-shadow: 0 1.4rem 2.5rem rgba(0, 0, 0, 0.35);
+    background: var(--st-semantic-action-primary);
+    box-shadow: var(--st-shadow-floating);
     transform: rotate(-5deg);
   }
   .card-back::after {
     content: "";
     position: absolute;
     inset: 0.45rem;
-    border: 2px solid rgba(255, 255, 255, 0.45);
+    border: 2px solid
+      color-mix(in srgb, var(--st-semantic-text-inverse) 48%, transparent);
     border-radius: 0.25rem;
   }
   .scan-lens {
@@ -874,12 +815,11 @@
     z-index: 1;
     width: 3.1rem;
     aspect-ratio: 1;
-    border: 0.55rem solid rgba(255, 255, 255, 0.9);
+    border: 0.55rem solid
+      color-mix(in srgb, var(--st-semantic-text-inverse) 92%, transparent);
     border-radius: 1rem;
-    background: #756df0;
-    box-shadow:
-      0 0 0 0.25rem rgba(27, 32, 72, 0.35),
-      inset 0 0 0 0.3rem rgba(255, 255, 255, 0.22);
+    background: var(--st-semantic-data-category1);
+    box-shadow: var(--st-shadow-medium);
   }
   .focus-corners {
     position: absolute;
@@ -889,7 +829,7 @@
     position: absolute;
     width: 2.4rem;
     height: 2.4rem;
-    border-color: #fff;
+    border-color: var(--st-semantic-text-inverse);
     border-style: solid;
   }
   .focus-corners span:nth-child(1) {
@@ -928,22 +868,9 @@
     height: 1px;
     opacity: 0;
   }
-  .scan-actions label.disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
-  }
   .scan-actions label:has(input:focus-visible) {
-    outline: 3px solid color-mix(in srgb, var(--primary) 52%, transparent);
-    outline-offset: 2px;
-  }
-  .privacy-note {
-    display: flex;
-    align-items: flex-start;
-    justify-content: center;
-    gap: 0.35rem;
-    margin: 0.8rem 0 0;
-    color: var(--muted);
-    font-size: 0.72rem;
+    outline: var(--st-focus-width) solid var(--st-focus-color);
+    outline-offset: var(--st-focus-offset);
   }
   .manual-search {
     display: grid;
@@ -958,7 +885,7 @@
     min-height: calc(100dvh - 11rem);
     margin: -1rem;
     border-radius: 0 0 1.5rem 1.5rem;
-    background: #050914;
+    background: var(--st-semantic-surface-inverse);
   }
   .camera-shell video {
     width: 100%;
@@ -972,15 +899,16 @@
     width: min(75vw, 20rem);
     aspect-ratio: 2.5/3.5;
     transform: translate(-50%, -55%);
-    border: 1px solid rgba(255, 255, 255, 0.5);
+    border: 1px solid
+      color-mix(in srgb, var(--st-semantic-text-inverse) 52%, transparent);
     border-radius: 0.75rem;
-    box-shadow: 0 0 0 100vmax rgba(4, 8, 18, 0.45);
+    box-shadow: 0 0 0 100vmax var(--st-semantic-surface-overlay);
   }
   .card-guide span {
     position: absolute;
     width: 2.8rem;
     height: 2.8rem;
-    border: solid #fff;
+    border: solid var(--st-semantic-text-inverse);
   }
   .card-guide span:nth-child(1) {
     top: -2px;
@@ -1018,7 +946,7 @@
     place-items: center;
     width: 4.5rem;
     aspect-ratio: 1;
-    border: 3px solid white;
+    border: 3px solid var(--st-semantic-text-inverse);
     border-radius: 50%;
     background: transparent;
   }
@@ -1026,14 +954,14 @@
   .candidate:focus-visible,
   .back-button:focus-visible,
   .text-button:focus-visible {
-    outline: 3px solid color-mix(in srgb, var(--primary) 58%, white);
-    outline-offset: 3px;
+    outline: var(--st-focus-width) solid var(--st-focus-color);
+    outline-offset: var(--st-focus-offset);
   }
   .capture-button span {
     width: 3.5rem;
     aspect-ratio: 1;
     border-radius: 50%;
-    background: #fff;
+    background: var(--st-semantic-text-inverse);
   }
   :global(.processing-card) {
     display: grid;
@@ -1042,7 +970,7 @@
     align-items: center;
     padding: 1rem;
     border-radius: 1.4rem;
-    box-shadow: var(--shadow);
+    box-shadow: var(--st-component-card-shadow);
   }
   :global(.processing-card) img {
     width: 100%;
@@ -1080,7 +1008,7 @@
     height: 100%;
     border-radius: inherit;
     background: var(--primary);
-    transition: width 0.2s;
+    transition: width var(--st-motion-normal) var(--st-motion-easing);
   }
   .results {
     display: grid;
@@ -1090,7 +1018,10 @@
     display: flex;
     gap: 0.8rem;
     align-items: center;
-    outline: none;
+  }
+  .results-heading:focus-visible {
+    outline: var(--st-focus-width) solid var(--st-focus-color);
+    outline-offset: var(--st-focus-offset);
   }
   .results-heading h2 {
     margin: 0;
@@ -1131,11 +1062,11 @@
     border: 1px solid var(--line);
     border-radius: 1rem;
     background: var(--surface);
-    box-shadow: 0 0.35rem 1rem rgba(19, 31, 60, 0.04);
+    box-shadow: var(--st-shadow-subtle);
   }
   .candidate.top {
     border-color: color-mix(in srgb, var(--primary) 35%, var(--line));
-    box-shadow: 0 0.4rem 1.2rem rgba(79, 70, 229, 0.1);
+    box-shadow: var(--st-shadow-medium);
   }
   .candidate-image {
     display: grid;
@@ -1197,7 +1128,7 @@
     align-items: center;
     padding: 0.9rem;
     border-radius: 1.2rem;
-    box-shadow: var(--shadow);
+    box-shadow: var(--st-component-card-shadow);
   }
   :global(.selected-card > img) {
     width: 100%;
@@ -1256,8 +1187,8 @@
     opacity: 0;
   }
   .choice-grid label:has(input:focus-visible) {
-    outline: 3px solid color-mix(in srgb, var(--primary) 52%, transparent);
-    outline-offset: 2px;
+    outline: var(--st-focus-width) solid var(--st-focus-color);
+    outline-offset: var(--st-focus-offset);
   }
   .choice-grid.compact {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1294,8 +1225,8 @@
   }
   .money-input:has(input:focus-visible),
   .money-input select:focus-visible {
-    outline: 3px solid color-mix(in srgb, var(--primary) 52%, transparent);
-    outline-offset: 2px;
+    outline: var(--st-focus-width) solid var(--st-focus-color);
+    outline-offset: var(--st-focus-offset);
   }
   .required-note {
     margin: -0.4rem 0 0;
@@ -1351,10 +1282,15 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .spinner {
-      animation-duration: 2s;
+      animation: none;
+      border-top-color: var(--st-semantic-border-strong);
     }
     .progress-track span {
       transition: none;
+    }
+    .card-back,
+    .hero-orb {
+      transform: none;
     }
   }
 </style>

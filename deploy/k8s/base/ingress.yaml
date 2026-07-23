@@ -6,10 +6,12 @@ metadata:
     app.kubernetes.io/name: pokemon-cards
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
 spec:
   ingressClassName: traefik
   rules:
-    - host: pokemon-cards.sent-tech.ca
+    - host: pokemon.sent-tech.ca
       http:
         paths:
           - path: /
@@ -21,5 +23,5 @@ spec:
                   name: http
   tls:
     - hosts:
-        - pokemon-cards.sent-tech.ca
+        - pokemon.sent-tech.ca
       secretName: pokemon-cards-tls

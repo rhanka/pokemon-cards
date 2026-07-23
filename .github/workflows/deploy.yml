@@ -120,17 +120,50 @@ jobs:
           USED_CPU="$(kubectl -n pokemon-cards get resourcequota tenant-quota -o jsonpath='{.status.used.requests\.cpu}')"
           HARD_MEMORY="$(kubectl -n pokemon-cards get resourcequota tenant-quota -o jsonpath='{.status.hard.requests\.memory}')"
           USED_MEMORY="$(kubectl -n pokemon-cards get resourcequota tenant-quota -o jsonpath='{.status.used.requests\.memory}')"
+          CURRENT_CPU="$(kubectl -n pokemon-cards get deployment pokemon-cards -o jsonpath='{.spec.template.spec.containers[?(@.name=="cardscope")].resources.requests.cpu}' 2>/dev/null || true)"
+          CURRENT_MEMORY="$(kubectl -n pokemon-cards get deployment pokemon-cards -o jsonpath='{.spec.template.spec.containers[?(@.name=="cardscope")].resources.requests.memory}' 2>/dev/null || true)"
           test -n "$HARD_CPU"
           test -n "$HARD_MEMORY"
           CPU_REMAINING="$(( $(cpu_millis "$HARD_CPU") - $(cpu_millis "$USED_CPU") ))"
           MEMORY_REMAINING="$(( $(memory_mib "$HARD_MEMORY") - $(memory_mib "$USED_MEMORY") ))"
-          test "$CPU_REMAINING" -ge 20
-          test "$MEMORY_REMAINING" -ge 256
+          CPU_INCREMENT="$(( 20 - $(cpu_millis "$CURRENT_CPU") ))"
+          MEMORY_INCREMENT="$(( 256 - $(memory_mib "$CURRENT_MEMORY") ))"
+          test "$CPU_REMAINING" -ge "$(( CPU_INCREMENT > 0 ? CPU_INCREMENT : 0 ))"
+          test "$MEMORY_REMAINING" -ge "$(( MEMORY_INCREMENT > 0 ? MEMORY_INCREMENT : 0 ))"
       - name: Server-side dry-run
         run: kubectl apply --server-side --dry-run=server -f "$RENDERED_MANIFEST" -o name
+      - name: Expand the existing PVC in place
+        run: |
+          kubectl -n pokemon-cards patch pvc pokemon-cards-data --type=merge \
+            -p '{"spec":{"resources":{"requests":{"storage":"4Gi"}}}}'
+          READY=false
+          for attempt in $(seq 1 36); do
+            CAPACITY="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.status.capacity.storage}')"
+            PENDING="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.status.conditions[?(@.type=="FileSystemResizePending")].status}')"
+            if [ "$CAPACITY" = "4Gi" ] || [ "$PENDING" = "True" ]; then
+              READY=true
+              break
+            fi
+            sleep 5
+          done
+          test "$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.spec.resources.requests.storage}')" = "4Gi"
+          if [ "$READY" != "true" ]; then
+            echo "PVC expansion did not become ready before workload mutation" >&2
+            exit 1
+          fi
       - name: Apply and wait
         run: |
           kubectl apply -f "$RENDERED_MANIFEST"
           kubectl -n pokemon-cards rollout status deployment/pokemon-cards --timeout=180s
+          for attempt in $(seq 1 36); do
+            CAPACITY="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.status.capacity.storage}')"
+            PENDING="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.status.conditions[?(@.type=="FileSystemResizePending")].status}')"
+            if [ "$CAPACITY" = "4Gi" ] && [ "$PENDING" != "True" ]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "PVC expansion did not complete after the Recreate rollout" >&2
+          exit 1
       - name: Smoke
-        run: curl --fail --show-error --silent --retry 8 --retry-delay 5 https://pokemon-cards.sent-tech.ca/api/health
+        run: curl --fail --show-error --silent --retry 8 --retry-delay 5 https://pokemon.sent-tech.ca/api/health

@@ -263,6 +263,71 @@ describe("collection event runtime integrity", () => {
     expect(currentSnapshot(repo).holdings[0].quantity).toBe(100_000);
   });
 
+  it("should atomically reject a concurrent mutation that targets an inactive holding", async () => {
+    const repo = repository();
+    await repo.init();
+    await repo.add({
+      card: { id: "single-card", name: "Single card" },
+      finish: "normal",
+      condition: "good",
+    });
+    const holdingId = currentSnapshot(repo).holdings[0].id;
+
+    const results = await Promise.allSettled([
+      repo.adjustQuantity(holdingId, -1),
+      repo.adjustQuantity(holdingId, -1),
+    ]);
+
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      results.filter((result) => result.status === "rejected"),
+    ).toHaveLength(1);
+    expect(currentSnapshot(repo).holdings).toEqual([]);
+    expect(await repo.allEvents()).toHaveLength(2);
+  });
+
+  it("should atomically group concurrent adds of the same card", async () => {
+    const repo = repository();
+    await repo.init();
+    const input = {
+      card: { id: "double-tap-card", name: "Double tap card" },
+      finish: "normal" as const,
+      condition: "good" as const,
+    };
+
+    await Promise.all([repo.add(input), repo.add(input)]);
+
+    expect(currentSnapshot(repo).holdings).toHaveLength(1);
+    expect(currentSnapshot(repo).holdings[0].quantity).toBe(2);
+    expect((await repo.allEvents()).map((event) => event.type)).toEqual([
+      "holding.added",
+      "holding.quantity-adjusted",
+    ]);
+  });
+
+  it("should reject a structurally valid import that violates the holding state machine", async () => {
+    const repo = repository();
+    await repo.init();
+    const updateWithoutHolding: CollectionEvent = {
+      id: "orphan-update",
+      type: "holding.updated",
+      holdingId: "missing-holding",
+      occurredAt: "2026-01-02T00:00:00.000Z",
+      deviceId: "device-1",
+      payload: { note: "orphan" },
+    };
+
+    await expect(
+      repo.importEvents([updateWithoutHolding], {
+        source: "restore",
+        mode: "merge",
+      }),
+    ).rejects.toThrow(/active holding/i);
+    expect(await repo.allEvents()).toEqual([]);
+  });
+
   it("should validate an entire CSV holding batch before any row persists", async () => {
     const repo = repository();
     await repo.init();
@@ -334,7 +399,25 @@ describe("collection event runtime integrity", () => {
     ]);
   });
 
-  it("should exclude acknowledgements from backups and reset them on JSON restore", async () => {
+  it("should reject an individually oversized restore before it can poison the sync queue", async () => {
+    const repo = repository();
+    await repo.init();
+    repo.setSyncOperationByteLimit(512);
+    const oversized = addedEvent("oversized-event", {
+      ...holding,
+      note: "x".repeat(1_000),
+    });
+
+    await expect(
+      repo.importEvents([oversized], {
+        source: "restore",
+        mode: "merge",
+      }),
+    ).rejects.toThrow(/sync limit/i);
+    expect(await repo.allEvents()).toEqual([]);
+  });
+
+  it("should exclude transport metadata from backups without resetting an authenticated epoch", async () => {
     const repo = repository();
     await repo.init();
     await repo.setSyncSubject("account-a");
@@ -344,23 +427,44 @@ describe("collection event runtime integrity", () => {
     });
     await repo.markSynced("account-a", ["event-1"], "2026-07-22T00:00:00.000Z");
     await repo.setSyncCursor("account-a", "12");
+    await repo.setSyncGeneration("account-a", "7");
 
-    const backup = eventsToJson(await repo.allEvents());
+    const eventsForBackup = await repo.allEvents();
+    eventsForBackup[0].serverSequence = 99;
+    const backup = eventsToJson(eventsForBackup);
     expect(backup).not.toContain("syncedAt");
+    expect(backup).not.toContain("serverSequence");
     await repo.importEvents(eventsFromJson(backup), {
       source: "restore",
       mode: "merge",
     });
 
-    expect(await repo.getSyncCursor("account-a")).toBeNull();
-    expect(await repo.unsyncedEvents("account-a")).toHaveLength(1);
-    expect((await repo.allEvents())[0].syncedAt).toBeUndefined();
+    expect(await repo.getSyncCursor("account-a")).toBe("12");
+    expect(await repo.getSyncGeneration("account-a")).toBe("7");
+    expect(await repo.unsyncedEvents("account-a")).toEqual([]);
+    expect((await repo.allEvents())[0].syncedAt).toBe(
+      "2026-07-22T00:00:00.000Z",
+    );
+
+    const secondHolding = {
+      ...holding,
+      id: "holding-restored",
+      cardId: "card-restored",
+      card: { id: "card-restored", name: "Restored" },
+    };
+    await repo.importEvents([addedEvent("event-restored", secondHolding)], {
+      source: "restore",
+      mode: "merge",
+    });
+    expect(
+      (await repo.unsyncedEvents("account-a")).map((event) => event.id),
+    ).toEqual(["event-restored"]);
+    expect(await repo.getSyncGeneration("account-a")).toBe("7");
   });
 
   it("should support explicit atomic merge and confirmed replace restore modes", async () => {
     const repo = repository();
     await repo.init();
-    await repo.setSyncSubject("account-a");
     await repo.importEvents([addedEvent()], {
       source: "restore",
       mode: "merge",
@@ -420,6 +524,63 @@ describe("collection event runtime integrity", () => {
 });
 
 describe("account-scoped synchronization state", () => {
+  it("should preserve acknowledged server ordering when an older backup repeats the same IDs", async () => {
+    const repo = repository();
+    await repo.init();
+    await repo.setSyncSubject("account-a");
+    const remoteAdded = {
+      ...addedEvent(),
+      occurredAt: "2026-12-31T00:00:00.000Z",
+      serverSequence: 11,
+    };
+    const remoteAdjustment: CollectionEvent = {
+      id: "event-adjust",
+      type: "holding.quantity-adjusted",
+      holdingId: holding.id,
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      deviceId: "device-2",
+      payload: { delta: 1 },
+      serverSequence: 12,
+    };
+    await repo.setSyncGeneration("account-a", "1");
+    await repo.importEvents([remoteAdded, remoteAdjustment], {
+      source: "remote",
+      subject: "account-a",
+      generation: "1",
+    });
+    expect(currentSnapshot(repo).holdings[0].quantity).toBe(2);
+
+    const oldBackup = [remoteAdded, remoteAdjustment].map((event) => {
+      const copy = structuredClone(event);
+      delete copy.serverSequence;
+      delete copy.syncedAt;
+      return copy;
+    });
+    await repo.importEvents(oldBackup, {
+      source: "restore",
+      mode: "merge",
+    });
+
+    expect(currentSnapshot(repo).holdings[0].quantity).toBe(2);
+    expect(await repo.unsyncedEvents("account-a")).toEqual([]);
+    expect(
+      Object.fromEntries(
+        (await repo.allEvents()).map((event) => [
+          event.id,
+          event.serverSequence,
+        ]),
+      ),
+    ).toEqual({ "event-1": 11, "event-adjust": 12 });
+
+    await expect(
+      repo.importEvents([{ ...oldBackup[1], payload: { delta: 2 } }], {
+        source: "restore",
+        mode: "merge",
+      }),
+    ).rejects.toThrow(/conflicting content/i);
+    expect(currentSnapshot(repo).holdings[0].quantity).toBe(2);
+  });
+
   it("should migrate legacy events without ownership into the anonymous domain", async () => {
     const databaseName = `cardscope-legacy-${crypto.randomUUID()}`;
     const legacy = new Dexie(databaseName);
@@ -499,13 +660,15 @@ describe("account-scoped synchronization state", () => {
       cardId: "a-replacement",
       card: { id: "a-replacement", name: "A replacement" },
     };
-    await repo.importEvents([addedEvent("a-replacement-event", replacement)], {
-      source: "restore",
-      mode: "replace",
-      confirmed: true,
-    });
+    await expect(
+      repo.importEvents([addedEvent("a-replacement-event", replacement)], {
+        source: "restore",
+        mode: "replace",
+        confirmed: true,
+      }),
+    ).rejects.toThrow(/generation change/i);
     expect(currentSnapshot(repo).holdings.map((item) => item.cardId)).toEqual([
-      "a-replacement",
+      "a-card",
     ]);
     await repo.setSyncSubject("account-b");
     expect(currentSnapshot(repo).holdings.map((item) => item.cardId)).toEqual([
@@ -570,13 +733,396 @@ describe("account-scoped synchronization state", () => {
     const repo = repository();
     await repo.init();
     await repo.setSyncSubject("account-a");
+    await repo.setSyncGeneration("account-a", "1");
     await repo.importEvents([addedEvent()], {
       source: "remote",
       subject: "account-a",
+      generation: "1",
     });
 
     expect(await repo.unsyncedEvents("account-a")).toEqual([]);
     await repo.setSyncSubject("account-b");
     expect(await repo.unsyncedEvents("account-b")).toEqual([]);
+  });
+
+  it("should atomically adopt anonymous events into the signed-in account exactly once", async () => {
+    const repo = repository();
+    await repo.init();
+    await repo.add({
+      card: { id: "anonymous-card", name: "Anonymous card" },
+      finish: "normal",
+      condition: "good",
+    });
+    expect(await repo.eventCountForSubject(null)).toBe(1);
+
+    await repo.setSyncSubject("account-a");
+    await repo.setSyncGeneration("account-a", "1");
+    await repo.importEvents(
+      [
+        addedEvent("remote-event", {
+          ...holding,
+          id: "remote-holding",
+          cardId: "remote-card",
+          card: { id: "remote-card", name: "Remote card" },
+        }),
+      ],
+      { source: "remote", subject: "account-a", generation: "1" },
+    );
+
+    expect(await repo.claimAnonymousEvents("account-a")).toBe(1);
+    expect(await repo.claimAnonymousEvents("account-a")).toBe(0);
+    expect(await repo.eventCountForSubject(null)).toBe(0);
+    expect(await repo.eventCountForSubject("account-a")).toBe(2);
+    expect(
+      currentSnapshot(repo)
+        .holdings.map((item) => item.cardId)
+        .sort(),
+    ).toEqual(["anonymous-card", "remote-card"]);
+    expect(await repo.unsyncedEvents("account-a")).toHaveLength(1);
+
+    await repo.setSyncSubject(null);
+    expect(currentSnapshot(repo).holdings).toEqual([]);
+  });
+
+  it("should roll only the rejected enrollment events back to anonymous ownership", async () => {
+    const repo = repository();
+    await repo.init();
+    await repo.add({
+      card: { id: "anonymous-card", name: "Anonymous card" },
+      finish: "normal",
+      condition: "good",
+    });
+    const anonymousIds = (await repo.eventsForSubject(null)).map(
+      (event) => event.id,
+    );
+    await repo.setSyncSubject("account-a");
+    await repo.setSyncGeneration("account-a", "1");
+    await repo.importEvents(
+      [
+        addedEvent("account-event", {
+          ...holding,
+          id: "account-holding",
+          cardId: "account-card",
+          card: { id: "account-card", name: "Account card" },
+        }),
+      ],
+      { source: "remote", subject: "account-a", generation: "1" },
+    );
+    await repo.claimAnonymousEvents("account-a", { trackEnrollment: true });
+    expect(await repo.getPendingEnrollment("account-a")).toEqual({
+      claimedIds: anonymousIds,
+      attemptedIds: [],
+    });
+    await repo.setPendingEnrollmentAttempt("account-a", anonymousIds);
+    expect(await repo.getPendingEnrollment("account-a")).toEqual({
+      claimedIds: anonymousIds,
+      attemptedIds: anonymousIds,
+    });
+
+    expect(
+      await repo.returnClaimedEventsToAnonymous("account-a", anonymousIds),
+    ).toBe(1);
+    expect(await repo.eventCountForSubject(null)).toBe(1);
+    expect(await repo.eventCountForSubject("account-a")).toBe(1);
+    expect(await repo.getPendingEnrollment("account-a")).toBeNull();
+    expect(currentSnapshot(repo).holdings.map((item) => item.cardId)).toEqual([
+      "account-card",
+    ]);
+  });
+
+  it("should block every account-domain user mutation across tabs until enrollment resolves", async () => {
+    const databaseName = `cardscope-enrollment-${crypto.randomUUID()}`;
+    const first = new CollectionRepository(databaseName);
+    const second = new CollectionRepository(databaseName);
+    opened.push(first, second);
+    await first.init();
+    await second.init();
+    await first.add({
+      card: { id: "anonymous-card", name: "Anonymous card" },
+      finish: "normal",
+      condition: "good",
+    });
+    await first.setSyncSubject("account-a");
+    await second.setSyncSubject("account-a");
+    await first.setSyncGeneration("account-a", "1");
+    await first.claimAnonymousEvents("account-a", { trackEnrollment: true });
+
+    await expect(
+      second.add({
+        card: { id: "late-card", name: "Late card" },
+        finish: "normal",
+        condition: "good",
+      }),
+    ).rejects.toThrow(/enrollment/i);
+    await expect(
+      second.importHoldings([
+        {
+          card: { id: "imported-card", name: "Imported card" },
+          finish: "normal",
+          condition: "good",
+        },
+      ]),
+    ).rejects.toThrow(/enrollment/i);
+    await expect(
+      second.importEvents([addedEvent("restore-during-enrollment")], {
+        source: "restore",
+        mode: "merge",
+      }),
+    ).rejects.toThrow(/enrollment/i);
+
+    const claimedIds = (await first.getPendingEnrollment("account-a"))!
+      .claimedIds;
+    await first.setPendingEnrollmentAttempt("account-a", claimedIds);
+    await first.completePendingEnrollment("account-a");
+    await second.add({
+      card: { id: "after-enrollment", name: "After enrollment" },
+      finish: "normal",
+      condition: "good",
+    });
+    expect(await second.eventCountForSubject("account-a")).toBe(2);
+  });
+
+  it("should fail closed when pending enrollment metadata is corrupt", async () => {
+    const databaseName = `cardscope-corrupt-enrollment-${crypto.randomUUID()}`;
+    const repo = new CollectionRepository(databaseName);
+    opened.push(repo);
+    await repo.init();
+    await repo.add({
+      card: { id: "anonymous-card", name: "Anonymous card" },
+      finish: "normal",
+      condition: "good",
+    });
+    await repo.setSyncSubject("account-a");
+    await repo.setSyncGeneration("account-a", "1");
+    await repo.claimAnonymousEvents("account-a", { trackEnrollment: true });
+
+    const raw = new Dexie(databaseName);
+    raw.version(1).stores({
+      events: "&id, occurredAt, holdingId, type, syncedAt",
+      meta: "&key",
+    });
+    await raw.open();
+    await raw
+      .table("meta")
+      .put({ key: "sync:account-a:enrollment", value: '{"claimedIds":42}' });
+    raw.close();
+
+    await expect(repo.getPendingEnrollment("account-a")).rejects.toThrow(
+      /metadata is invalid/i,
+    );
+    await expect(
+      repo.add({
+        card: { id: "blocked-card", name: "Blocked card" },
+        finish: "normal",
+        condition: "good",
+      }),
+    ).rejects.toThrow(/enrollment/i);
+  });
+
+  it("should invalidate peer snapshots and block cross-tab mutations during deletion", async () => {
+    const databaseName = `cardscope-shared-${crypto.randomUUID()}`;
+    const first = new CollectionRepository(databaseName);
+    const second = new CollectionRepository(databaseName);
+    opened.push(first, second);
+    await first.init();
+    await second.init();
+    await first.setSyncSubject("account-a");
+    await second.setSyncSubject("account-a");
+
+    await first.add({
+      card: { id: "shared-card", name: "Shared card" },
+      finish: "normal",
+      condition: "good",
+    });
+    for (
+      let attempt = 0;
+      attempt < 20 && currentSnapshot(second).eventCount === 0;
+      attempt += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(currentSnapshot(second).holdings.map((item) => item.cardId)).toEqual(
+      ["shared-card"],
+    );
+
+    const release = await first.lockAccountMutations("account-a");
+    await expect(
+      second.add({
+        card: { id: "blocked-card", name: "Blocked card" },
+        finish: "normal",
+        condition: "good",
+      }),
+    ).rejects.toThrow(/deletion/i);
+    await expect(
+      second.clearAccountData("account-a", { confirmed: true }),
+    ).rejects.toThrow(/deletion/i);
+    await expect(
+      second.add({
+        card: { id: "still-blocked", name: "Still blocked" },
+        finish: "normal",
+        condition: "good",
+      }),
+    ).rejects.toThrow(/deletion/i);
+    await first.clearAccountData("account-a", {
+      confirmed: true,
+      preserveMutationLock: true,
+    });
+    await first.setSyncGeneration("account-a", "9");
+    for (
+      let attempt = 0;
+      attempt < 20 && currentSnapshot(second).eventCount !== 0;
+      attempt += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(currentSnapshot(second).holdings).toEqual([]);
+    await release();
+    await second.add({
+      card: { id: "after-delete", name: "After delete" },
+      finish: "normal",
+      condition: "good",
+    });
+    expect(currentSnapshot(second).holdings).toHaveLength(1);
+    expect(await second.getSyncGeneration("account-a")).toBe("9");
+  });
+
+  it("should roll enrollment back if the merged event log is invalid", async () => {
+    const repo = repository();
+    await repo.init();
+    await repo.importEvents(
+      [
+        addedEvent("anonymous-added", {
+          ...holding,
+          id: "shared-holding",
+        }),
+      ],
+      { source: "restore", mode: "merge" },
+    );
+
+    await repo.setSyncSubject("account-a");
+    await repo.importEvents(
+      [
+        addedEvent("account-added", {
+          ...holding,
+          id: "shared-holding",
+        }),
+      ],
+      { source: "restore", mode: "merge" },
+    );
+
+    await expect(repo.claimAnonymousEvents("account-a")).rejects.toThrow(
+      /identifier/i,
+    );
+    expect(await repo.eventCountForSubject(null)).toBe(1);
+    expect(await repo.eventCountForSubject("account-a")).toBe(1);
+  });
+
+  it("should erase the acknowledged account cache without affecting anonymous or other-account data", async () => {
+    const repo = repository();
+    await repo.init();
+    await repo.add({
+      card: { id: "anonymous-card", name: "Anonymous card" },
+      finish: "normal",
+      condition: "good",
+    });
+    await repo.setSyncSubject("account-a");
+    await repo.setSyncGeneration("account-a", "3");
+    await repo.importEvents([addedEvent()], {
+      source: "remote",
+      subject: "account-a",
+      generation: "3",
+    });
+    await repo.setSyncCursor("account-a", "12");
+    await repo.setSyncSubject("account-b");
+    await repo.add({
+      card: { id: "other-card", name: "Other account card" },
+      finish: "normal",
+      condition: "good",
+    });
+    await repo.setSyncSubject("account-a");
+
+    await expect(
+      repo.clearAccountData("account-a", {
+        confirmed: false as true,
+      }),
+    ).rejects.toThrow(/explicit confirmation/i);
+    expect(await repo.clearAccountData("account-a", { confirmed: true })).toBe(
+      1,
+    );
+    expect(currentSnapshot(repo).holdings).toEqual([]);
+    expect(await repo.getSyncCursor("account-a")).toBeNull();
+    expect(await repo.getSyncGeneration("account-a")).toBeNull();
+    expect(await repo.unsyncedEvents("account-a")).toEqual([]);
+    expect(await repo.eventCountForSubject(null)).toBe(1);
+    expect(await repo.eventCountForSubject("account-b")).toBe(1);
+  });
+
+  it("should isolate and validate server generations per account", async () => {
+    const repo = repository();
+    await repo.init();
+
+    await repo.setSyncGeneration("account-a", "7");
+    expect(await repo.getSyncGeneration("account-a")).toBe("7");
+    expect(await repo.getSyncGeneration("account-b")).toBeNull();
+    await expect(repo.setSyncGeneration("account-a", "0")).rejects.toThrow(
+      /generation/i,
+    );
+    await expect(
+      repo.setSyncGeneration("account-a", "9007199254740992"),
+    ).rejects.toThrow(/generation/i);
+    await expect(repo.setSyncGeneration("account-a", "6")).rejects.toThrow(
+      /generation changed/i,
+    );
+  });
+
+  it("should fence a delayed stale-generation recovery from new account mutations", async () => {
+    const databaseName = `cardscope-generation-fence-${crypto.randomUUID()}`;
+    const first = new CollectionRepository(databaseName);
+    const second = new CollectionRepository(databaseName);
+    opened.push(first, second);
+    await first.init();
+    await second.init();
+    await first.setSyncSubject("account-a");
+    await second.setSyncSubject("account-a");
+    await first.setSyncGeneration("account-a", "1");
+    await first.add({
+      card: { id: "stale-card", name: "Stale card" },
+      finish: "normal",
+      condition: "good",
+    });
+
+    expect(
+      await first.clearAccountData("account-a", {
+        confirmed: true,
+        expectedGeneration: "1",
+        replacementGeneration: "2",
+      }),
+    ).toBe(1);
+    await second.add({
+      card: { id: "new-epoch-card", name: "New epoch card" },
+      finish: "normal",
+      condition: "good",
+    });
+
+    expect(
+      await second.clearAccountData("account-a", {
+        confirmed: true,
+        expectedGeneration: "1",
+        replacementGeneration: "2",
+      }),
+    ).toBeNull();
+    expect(await second.getSyncGeneration("account-a")).toBe("2");
+    expect(
+      (await second.eventsForSubject("account-a")).map(
+        (event) => event.payload,
+      ),
+    ).toHaveLength(1);
+    await expect(
+      second.importEvents([addedEvent("late-remote-event")], {
+        source: "remote",
+        subject: "account-a",
+        generation: "1",
+      }),
+    ).rejects.toThrow(/generation changed/i);
   });
 });

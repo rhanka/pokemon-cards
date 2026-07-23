@@ -6,10 +6,13 @@ Kubernetes reservation, actual CPU work, and marginal cash cost.
 
 ## Launch offer
 
-- Free: recognition under a transparent fair-use guard, local collection,
-  bulk import/export, corrections, and authorised current estimates.
-- Cloud Pass: backup, account recovery, multi-device sync, and five-year
-  personal history.
+- Free pilot: recognition under a transparent fair-use guard, an enrolled
+  account with central history, offline cache, bulk import/export, corrections,
+  and authorised current estimates.
+- Five-year Pass hypothesis: one low-friction payment for continued service,
+  account recovery, multi-device sync, and five-year personal history. Billing
+  does not change the storage architecture: every enrolled account is counted
+  centrally.
 - Launch hypothesis: **USD 4.99 once for five years**.
 - No advertising, sale of personal data, or paid ranking.
 - Price is rechecked against complete cost and may never exceed cost +50%.
@@ -50,13 +53,14 @@ upload is budgeted at 150 KiB on average and hard-capped at 2 MiB.
 | Image ingress at 150 KiB |        60 MB |  750 MB |  3.6 GB |
 | Average OCR CPU          |        0.51m |   6.37m |  30.56m |
 | Peak OCR CPU ×20         |       10.19m | 127.31m | 611.11m |
-| Optimised API requests   |        1,720 |  14,600 |  66,400 |
-| Average optimised RPS    |       0.0007 |  0.0056 |   0.026 |
+| Optimised API requests   |        1,600 |  11,000 |  48,000 |
+| Average optimised RPS    |       0.0006 |  0.0042 |  0.0185 |
 
-Collection browsing is served from IndexedDB. Fifty cards viewed in a session
-must not create fifty server calls. Today, values change only after a bounded
-catalogue query. The next refresh implementation uses one global quote per SKU
-and one compact watermark/delta per session.
+Collection browsing is served from the account-scoped IndexedDB cache. Fifty
+cards viewed in a session do not create fifty server calls. Each active session
+budgets one compact account sync plus bootstrap/global-delta calls; recognition
+uses one browser request whose server-side catalogue lookup covers English and
+French in parallel.
 
 The Kubernetes `requests.cpu: 20m` is a scheduling reservation, not a hard
 usage cap. The pod may burst to its `limits.cpu: 300m`. On the current
@@ -84,8 +88,9 @@ to the OVH/PostgreSQL scale tier.
 
 ## Storage for 1,000 accounts
 
-Only paid accounts consume cloud history. At 30% conversion, the first cohort
-has 300,000 cloud holdings. Sync events must store compact ownership facts:
+All enrolled accounts consume central history. The 30% paid conversion is a
+revenue hypothesis, not a storage filter: the first cohort has **1,000,000
+central holdings**. Sync events must store compact ownership facts:
 `cardId`, quantity, finish, condition, cost, note, and event metadata.
 Catalogue records and quotes are global and must not be copied into every
 event.
@@ -97,23 +102,23 @@ Acceptance budgets are:
 | Initial compact add    |    ≤700 bytes |
 | Later holding mutation |    ≤500 bytes |
 
-With one add per holding and one mutation per two holdings, 300 paid accounts
-use about 285 MB of event data. Adding the enforced 256 MiB catalogue-cache
-budget and 25% storage headroom gives about 0.64 GiB primary in the base
-scenario, or 1.93 GiB across primary plus two off-volume backup copies. A
-1 GiB POC PVC is therefore a bounded first-cohort tier, not a forever
-capacity claim.
+Across the measured consultation/mutation scenarios, one million holdings
+require **1.19–2.00 GiB primary**, including the enforced 256 MiB catalogue
+cache and 25% headroom, or **3.56–6.00 GiB** across primary plus two off-volume
+backup copies. The base case is 1.42 GiB primary / 4.26 GiB with backups. A
+4 GiB PVC is therefore a bounded first-cohort primary tier with WAL headroom;
+the backups live outside it.
 
-At 100,000 accounts and 30% Cloud Pass conversion, 30 million holdings imply
-about 21 GB of compact adds plus 7.5 GB of mutations. With backups, the
-planning range is roughly 57–85 GB. That tier requires PostgreSQL, multiple
-stateless replicas, distributed rate limits, and the planned OVH migration.
+At 100,000 accounts, 100 million central holdings require roughly
+88–169 GiB primary and 263–507 GiB with two backup copies across the same
+scenarios. That tier requires PostgreSQL, multiple stateless replicas,
+distributed rate limits, and the planned OVH migration.
 
 ## Pricing guardrail
 
 | Five-year assumption             | 1,000 accounts | 100,000 accounts |
 | -------------------------------- | -------------: | ---------------: |
-| Cloud conversion                 |            30% |              30% |
+| Paid conversion                  |            30% |              30% |
 | Paid passes                      |            300 |           30,000 |
 | Revenue at USD 4.99              |      USD 1,497 |      USD 149,700 |
 | Complete cost ceiling            |        USD 998 |       USD 99,800 |

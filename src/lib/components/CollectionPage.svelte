@@ -44,7 +44,10 @@
     ) => Promise<void>;
   } = $props();
 
+  const pageSize = 40;
   let query = $state("");
+  let currentPage = $state(1);
+  let editingId = $state<string | null>(null);
   const totals = $derived(collectionTotals(snapshot.holdings));
   const filtered = $derived.by(() => {
     const needle = query.trim().toLocaleLowerCase();
@@ -60,6 +63,17 @@
         .some((value) => value?.toLocaleLowerCase().includes(needle)),
     );
   });
+  const pageCount = $derived(
+    Math.max(1, Math.ceil(filtered.length / pageSize)),
+  );
+  const activePage = $derived(Math.min(currentPage, pageCount));
+  const visibleHoldings = $derived(
+    filtered.slice((activePage - 1) * pageSize, activePage * pageSize),
+  );
+  const visibleStart = $derived(
+    filtered.length ? (activePage - 1) * pageSize + 1 : 0,
+  );
+  const visibleEnd = $derived(Math.min(activePage * pageSize, filtered.length));
 
   const finishes: CardFinish[] = [
     "normal",
@@ -130,6 +144,20 @@
     if (!Number.isFinite(amount) || amount < 0 || !/^[A-Z]{3}$/.test(currency))
       return;
     await onUpdate(holding.id, { unitCost: { amount, currency } });
+  }
+
+  function resetFilteredPage(): void {
+    currentPage = 1;
+    editingId = null;
+  }
+
+  function goToPage(page: number): void {
+    currentPage = Math.max(1, Math.min(page, pageCount));
+    editingId = null;
+  }
+
+  function toggleEditing(holdingId: string): void {
+    editingId = editingId === holdingId ? null : holdingId;
   }
 </script>
 
@@ -205,10 +233,11 @@
       size="lg"
       label={translate(locale, "collection.search")}
       bind:value={query}
+      oninput={resetFilteredPage}
       placeholder="Pikachu, 025/165…"
     />
     <div class="holding-list">
-      {#each filtered as holding (holding.id)}
+      {#each visibleHoldings as holding (holding.id)}
         <Card class="holding-card">
           <div class="holding-main">
             <div class="card-thumbnail">
@@ -234,120 +263,177 @@
               <h2>{holding.card.name}</h2>
               <PriceQuote quote={holding.quote} {locale} compact />
             </div>
-            <strong class="holding-value"
-              >{formatOptionalMoney(
-                locale,
-                holdingMarketValue(holding),
-                holding.quote?.currency ?? "USD",
-              )}</strong
-            >
-          </div>
-          <div class="holding-details">
-            <label>
-              <span>{translate(locale, "scanner.finish")}</span>
-              <select
-                value={holding.finish}
-                onchange={(event) =>
-                  void updateFinish(
-                    holding,
-                    (event.currentTarget as HTMLSelectElement)
-                      .value as CardFinish,
-                  )}
+            <div class="holding-actions">
+              <strong class="holding-value"
+                >{formatOptionalMoney(
+                  locale,
+                  holdingMarketValue(holding),
+                  holding.quote?.currency ?? "USD",
+                )}</strong
               >
-                {#each finishes as finish (finish)}<option value={finish}
-                    >{translate(
-                      locale,
-                      `finish.${finish}` as TranslationKey,
-                    )}</option
-                  >{/each}
-              </select>
-            </label>
-            <label>
-              <span>{translate(locale, "scanner.condition")}</span>
-              <select
-                value={holding.condition}
-                onchange={(event) =>
-                  void updateCondition(
-                    holding,
-                    (event.currentTarget as HTMLSelectElement)
-                      .value as CardCondition,
-                  )}
-              >
-                {#each conditions as condition (condition)}<option
-                    value={condition}
-                    >{translate(
-                      locale,
-                      `condition.${condition}` as TranslationKey,
-                    )}</option
-                  >{/each}
-              </select>
-            </label>
-            <form
-              class="cost-form"
-              aria-label={`${translate(locale, "collection.saveCost")}: ${holding.card.name}`}
-              onsubmit={(event) => void saveCost(event, holding)}
-            >
-              <label>
-                <span>{translate(locale, "collection.costAmount")}</span>
-                <input
-                  name="cost"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  inputmode="decimal"
-                  value={holding.unitCost?.amount ?? ""}
-                />
-              </label>
-              <label>
-                <span>{translate(locale, "collection.costCurrency")}</span>
-                <input
-                  name="currency"
-                  value={holding.unitCost?.currency ??
-                    holding.quote?.currency ??
-                    "USD"}
-                  maxlength="3"
-                  pattern={"[A-Za-z]{3}"}
-                  required
-                />
-              </label>
-              <Button type="submit" variant="secondary" size="lg"
-                >{translate(locale, "collection.saveCost")}</Button
-              >
-            </form>
-            <div
-              class="quantity-controls"
-              aria-label={`${holding.card.name}: ${holding.quantity}`}
-            >
               <Button
                 variant="secondary"
                 size="lg"
-                class="quantity-button"
-                onclick={() => void onAdjust(holding.id, -1)}
-                aria-label={translate(locale, "collection.decrease")}
-                ><Icon name="minus" size={17} /></Button
+                class="edit-button"
+                aria-expanded={editingId === holding.id}
+                aria-controls={`holding-details-${holding.id}`}
+                aria-label={translate(
+                  locale,
+                  editingId === holding.id
+                    ? "collection.closeEditCard"
+                    : "collection.editCard",
+                  { card: holding.card.name },
+                )}
+                onclick={() => toggleEditing(holding.id)}
               >
-              <strong>{holding.quantity}</strong>
-              <Button
-                variant="secondary"
-                size="lg"
-                class="quantity-button"
-                onclick={() => void onAdjust(holding.id, 1)}
-                aria-label={translate(locale, "collection.increase")}
-                ><Icon name="plus" size={17} /></Button
-              >
-              <Button
-                variant="danger"
-                size="lg"
-                class="quantity-button delete"
-                onclick={() => confirmRemove(holding.id)}
-                aria-label={translate(locale, "collection.remove")}
-                ><Icon name="trash" size={17} /></Button
-              >
+                {translate(
+                  locale,
+                  editingId === holding.id
+                    ? "collection.closeEdit"
+                    : "collection.edit",
+                )}
+              </Button>
             </div>
           </div>
+          {#if editingId === holding.id}
+            <div class="holding-details" id={`holding-details-${holding.id}`}>
+              <label>
+                <span>{translate(locale, "scanner.finish")}</span>
+                <select
+                  value={holding.finish}
+                  onchange={(event) =>
+                    void updateFinish(
+                      holding,
+                      (event.currentTarget as HTMLSelectElement)
+                        .value as CardFinish,
+                    )}
+                >
+                  {#each finishes as finish (finish)}<option value={finish}
+                      >{translate(
+                        locale,
+                        `finish.${finish}` as TranslationKey,
+                      )}</option
+                    >{/each}
+                </select>
+              </label>
+              <label>
+                <span>{translate(locale, "scanner.condition")}</span>
+                <select
+                  value={holding.condition}
+                  onchange={(event) =>
+                    void updateCondition(
+                      holding,
+                      (event.currentTarget as HTMLSelectElement)
+                        .value as CardCondition,
+                    )}
+                >
+                  {#each conditions as condition (condition)}<option
+                      value={condition}
+                      >{translate(
+                        locale,
+                        `condition.${condition}` as TranslationKey,
+                      )}</option
+                    >{/each}
+                </select>
+              </label>
+              <form
+                class="cost-form"
+                aria-label={`${translate(locale, "collection.saveCost")}: ${holding.card.name}`}
+                onsubmit={(event) => void saveCost(event, holding)}
+              >
+                <label>
+                  <span>{translate(locale, "collection.costAmount")}</span>
+                  <input
+                    name="cost"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    inputmode="decimal"
+                    value={holding.unitCost?.amount ?? ""}
+                  />
+                </label>
+                <label>
+                  <span>{translate(locale, "collection.costCurrency")}</span>
+                  <input
+                    name="currency"
+                    value={holding.unitCost?.currency ??
+                      holding.quote?.currency ??
+                      "USD"}
+                    maxlength="3"
+                    pattern={"[A-Za-z]{3}"}
+                    required
+                  />
+                </label>
+                <Button type="submit" variant="secondary" size="lg"
+                  >{translate(locale, "collection.saveCost")}</Button
+                >
+              </form>
+              <div
+                class="quantity-controls"
+                aria-label={`${holding.card.name}: ${holding.quantity}`}
+              >
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  class="quantity-button"
+                  onclick={() => void onAdjust(holding.id, -1)}
+                  aria-label={translate(locale, "collection.decrease")}
+                  ><Icon name="minus" size={17} /></Button
+                >
+                <strong>{holding.quantity}</strong>
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  class="quantity-button"
+                  onclick={() => void onAdjust(holding.id, 1)}
+                  aria-label={translate(locale, "collection.increase")}
+                  ><Icon name="plus" size={17} /></Button
+                >
+                <Button
+                  variant="danger"
+                  size="lg"
+                  class="quantity-button delete"
+                  onclick={() => confirmRemove(holding.id)}
+                  aria-label={translate(locale, "collection.remove")}
+                  ><Icon name="trash" size={17} /></Button
+                >
+              </div>
+            </div>
+          {/if}
         </Card>
       {/each}
     </div>
+
+    {#if filtered.length > pageSize}
+      <nav
+        class="pagination"
+        aria-label={translate(locale, "collection.pagination")}
+      >
+        <Button
+          variant="secondary"
+          size="lg"
+          disabled={activePage === 1}
+          onclick={() => goToPage(activePage - 1)}
+        >
+          {translate(locale, "collection.previous")}
+        </Button>
+        <span aria-live="polite">
+          {translate(locale, "collection.pageStatus", {
+            start: visibleStart,
+            end: visibleEnd,
+            total: filtered.length,
+          })}
+        </span>
+        <Button
+          variant="secondary"
+          size="lg"
+          disabled={activePage === pageCount}
+          onclick={() => goToPage(activePage + 1)}
+        >
+          {translate(locale, "collection.next")}
+        </Button>
+      </nav>
+    {/if}
 
     <section class="history" aria-labelledby="history-title">
       <h2 id="history-title">{translate(locale, "collection.history")}</h2>
@@ -419,21 +505,15 @@
     display: grid;
     gap: 0.25rem;
     padding: 1.15rem;
-    color: white;
+    color: var(--st-semantic-text-inverse);
     border-radius: 1.3rem;
-    background:
-      radial-gradient(
-        circle at 90% 0,
-        rgba(117, 122, 255, 0.72),
-        transparent 42%
-      ),
-      linear-gradient(145deg, #18213d, #273967);
-    box-shadow: 0 1rem 2rem rgba(24, 33, 61, 0.18);
+    background: var(--st-semantic-surface-inverse);
+    box-shadow: var(--st-shadow-medium);
   }
   .value-hero > span,
   .value-range span,
   .value-grid span {
-    color: rgba(255, 255, 255, 0.68);
+    color: color-mix(in srgb, var(--st-semantic-text-inverse) 72%, transparent);
     font-size: 0.72rem;
   }
   .currency-totals {
@@ -446,7 +526,8 @@
   }
   .currency-totals article + article {
     padding-top: 0.85rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    border-top: 1px solid
+      color-mix(in srgb, var(--st-semantic-text-inverse) 20%, transparent);
   }
   .currency-market {
     display: flex;
@@ -459,7 +540,7 @@
     letter-spacing: -0.035em;
   }
   .currency-market span {
-    color: rgba(255, 255, 255, 0.72);
+    color: color-mix(in srgb, var(--st-semantic-text-inverse) 72%, transparent);
     font-size: 0.72rem;
     font-weight: 800;
   }
@@ -473,7 +554,8 @@
     justify-content: space-between;
     gap: 0.6rem;
     padding-bottom: 0.9rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    border-bottom: 1px solid
+      color-mix(in srgb, var(--st-semantic-text-inverse) 16%, transparent);
   }
   .value-range b {
     font-size: 0.78rem;
@@ -492,12 +574,12 @@
     font-size: 0.9rem;
   }
   .value-grid small {
-    color: #ffd58a;
+    color: var(--st-semantic-data-category6);
     font-size: 0.62rem;
     font-weight: 700;
   }
   .value-grid b.negative {
-    color: #ffb2b2;
+    color: var(--st-semantic-data-category8);
   }
   :global(.filter-field) {
     max-width: none;
@@ -518,6 +600,11 @@
     gap: 0.75rem;
     align-items: center;
     padding: 0.75rem;
+  }
+  .holding-actions {
+    display: grid;
+    justify-items: end;
+    gap: 0.5rem;
   }
   .card-thumbnail {
     position: relative;
@@ -544,8 +631,8 @@
     min-width: 1.65rem;
     height: 1.65rem;
     padding: 0 0.3rem;
-    color: white;
-    border: 2px solid white;
+    color: var(--st-semantic-action-primaryText);
+    border: 2px solid var(--st-semantic-surface-raised);
     border-radius: 1rem;
     background: var(--primary);
     font-size: 0.68rem;
@@ -571,9 +658,11 @@
     white-space: nowrap;
   }
   .holding-value {
-    align-self: start;
     padding-top: 0.1rem;
     font-size: 0.86rem;
+  }
+  :global(.edit-button) {
+    min-width: 4.75rem;
   }
   .holding-details {
     display: grid;
@@ -606,8 +695,8 @@
   }
   select:focus-visible,
   .cost-form input:focus-visible {
-    outline: 3px solid color-mix(in srgb, var(--primary) 52%, transparent);
-    outline-offset: 2px;
+    outline: var(--st-focus-width) solid var(--st-focus-color);
+    outline-offset: var(--st-focus-offset);
   }
   .cost-form {
     grid-column: 1/-1;
@@ -634,6 +723,19 @@
   }
   :global(.quantity-button.delete) {
     justify-self: end;
+  }
+  .pagination {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0.5rem;
+    align-items: center;
+    margin-top: 1rem;
+  }
+  .pagination span {
+    color: var(--st-semantic-text-secondary);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-align: center;
   }
   .history {
     margin-top: 1.3rem;

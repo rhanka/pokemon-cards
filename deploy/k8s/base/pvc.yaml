@@ -10,6 +10,6 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 1Gi
+      storage: 4Gi
 # This base currently targets the authorised Scaleway POC contract. A future
 # OVH overlay must replace this value only after its storage mapping is live.

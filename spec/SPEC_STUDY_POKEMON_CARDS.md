@@ -14,6 +14,8 @@ Comment livrer une application mobile de reconnaissance, collection et valorisat
 - Historique conservé pendant la durée libératoire, prise ici comme cinq ans.
 - Zéro publicité ; 100 000 comptes et environ 50 000 USD de marge constituent la cible.
 - Auth Sentropic et déploiement sur l'infrastructure Kubernetes déjà réellement disponible.
+- Le serveur authentifié est l'autorité de chaque compte enrôlé ; IndexedDB
+  sert uniquement de cache/outbox hors ligne.
 
 ## Marché observé
 
@@ -35,7 +37,12 @@ MobileNetV3-Small ou EfficientNet-Lite produit un embedding 128D comparé à env
 
 ### D. Hybride retenu
 
-Cadrage/réencodage client, OCR serveur TypeScript, recherche catalogue et abstention lorsque les scores sont proches. La finition et l'état restent une confirmation humaine. Le futur embedding serveur accélère ou complète l'OCR ; la photo n'est jamais persistée ni utilisée pour l'entraînement.
+Cadrage/réencodage client, OCR serveur TypeScript, recherches catalogue
+anglaise et française automatiques en parallèle, puis abstention lorsque les
+scores sont proches. Aucun choix de langue n'est demandé avant le scan ; la
+finition et l'état restent une confirmation humaine. Le futur embedding serveur
+accélère ou complète l'OCR ; la photo n'est jamais persistée ni utilisée pour
+l'entraînement.
 
 ## Modèles et jeux de données trouvés
 
@@ -63,6 +70,10 @@ Un paiement annuel de 1 USD est pénalisé par les frais fixes. Deux revues ind�
 
 Le prix bas maximise l'adoption et respecte la préférence du propriétaire. Le scénario 4,99 USD est retenu comme hypothèse de lancement, sous réserve de mesurer une conversion d'au moins 25–30 % et un coût complet maximal de 3,33 USD/pass sur cinq ans.
 
+La conversion payante affecte les revenus, pas l'autorité des données : le
+dimensionnement central couvre les 100 000 comptes, puis migre vers le palier
+OVH/PostgreSQL lorsque les gates de volume sont atteintes.
+
 ## Revue contradictoire et réconciliation
 
 1. Revue reconnaissance : a écarté toute fausse précision sur l'état/foil et exigé une confirmation humaine, un benchmark par UID et une abstention calibrée.
@@ -80,3 +91,7 @@ Les divergences OCR versus vision sont réconciliées ainsi : l'OCR serveur mesu
 - Benchmark séparé par UID, langue, set, époque, finition, téléphone et lumière, avec photos utilisateur jamais vues.
 - Conversion Pass >= 25 % à 1 000 comptes et coût complet observé compatible avec 4,99 USD / cinq ans.
 - Autorisation/licence explicite pour tout flux de prix, image de référence ou poids redistribué.
+- Origine canonique `https://pokemon.sent-tech.ca`, client OIDC de production
+  et récupération hors PVC vérifiés avant
+  `ACCOUNT_IDENTITY_READY=true`, `ACCOUNT_RECOVERY_READY=true` et
+  `OIDC_REQUIRED=true`, requête Kubernetes `20m` et PVC initial de 4 GiB.

@@ -7,10 +7,34 @@ import { describe, expect, it } from "vitest";
 
 import {
   SqliteStore,
+  SyncEnrollmentConflictError,
+  SyncGenerationMismatchError,
+  SyncOperationConflictError,
+  SyncOperationInvalidError,
   SyncOperationTooLargeError,
   SyncStorageLimitError,
 } from "../../server/store.js";
 import { FIXED_NOW, testOperation } from "./fixtures.js";
+
+const SYNC_OPTIONS = { retentionDays: 1_826, now: FIXED_NOW } as const;
+
+function syncOperations(
+  store: SqliteStore,
+  userId: string,
+  operations: Parameters<SqliteStore["sync"]>[1]["operations"],
+  options: Parameters<SqliteStore["sync"]>[2] = SYNC_OPTIONS,
+) {
+  const bootstrap = store.sync(
+    userId,
+    { generation: null, operations: [] },
+    options,
+  );
+  return store.sync(
+    userId,
+    { generation: bootstrap.generation, operations },
+    options,
+  );
+}
 
 function richAddedOperation(id = "operation-rich") {
   const quote = {
@@ -59,6 +83,20 @@ function richAddedOperation(id = "operation-rich") {
         acquiredAt: "2025-12-24T00:00:00.000Z",
         addedAt: FIXED_NOW.toISOString(),
         updatedAt: FIXED_NOW.toISOString(),
+      },
+    },
+  });
+}
+
+function distinctAddedOperation(id: string, holdingId: string) {
+  const operation = testOperation({ id });
+  return testOperation({
+    id,
+    holdingId,
+    payload: {
+      holding: {
+        ...(operation.payload as { holding: Record<string, unknown> }).holding,
+        id: holdingId,
       },
     },
   });
@@ -305,26 +343,31 @@ describe("SQLite store", () => {
     const operation = testOperation();
 
     try {
-      const first = store.sync(
-        "user-a",
-        { cursor: null, operations: [operation] },
-        { retentionDays: 1_826, now: FIXED_NOW },
-      );
+      const first = syncOperations(store, "user-a", [operation], {
+        retentionDays: 1_826,
+        now: FIXED_NOW,
+      });
       const duplicate = store.sync(
         "user-a",
-        { cursor: first.cursor, operations: [operation] },
+        {
+          cursor: first.cursor,
+          generation: first.generation,
+          operations: [operation],
+        },
         {
           retentionDays: 1_826,
           now: new Date(FIXED_NOW.getTime() + 86_400_000),
         },
       );
-      const sameIdForAnotherUser = store.sync(
+      const sameIdForAnotherUser = syncOperations(
+        store,
         "user-b",
-        { cursor: null, operations: [operation] },
+        [operation],
         { retentionDays: 1_826, now: FIXED_NOW },
       );
 
       expect(first.acceptedOperationIds).toEqual([operation.id]);
+      expect(first.generation).toBe("1");
       expect(first.events).toHaveLength(1);
       expect(first.events[0]).toMatchObject({
         id: operation.id,
@@ -332,12 +375,364 @@ describe("SQLite store", () => {
         receivedAt: FIXED_NOW.toISOString(),
       });
       expect(first.retentionUntil).toBe("2031-07-22T12:00:00.000Z");
-      expect(duplicate.acceptedOperationIds).toEqual([]);
+      expect(duplicate.acceptedOperationIds).toEqual([operation.id]);
+      expect(duplicate.generation).toBe("1");
       expect(duplicate.events).toEqual([]);
       // Retention is anchored on first activation, not silently renewed on every sync.
       expect(duplicate.retentionUntil).toBe(first.retentionUntil);
       expect(sameIdForAnotherUser.acceptedOperationIds).toEqual([operation.id]);
+      expect(sameIdForAnotherUser.generation).toBe("2");
       expect(sameIdForAnotherUser.events).toHaveLength(1);
+      expect(
+        store.database
+          .prepare(
+            `SELECT user_id, generation
+             FROM sync_accounts
+             ORDER BY user_id`,
+          )
+          .all(),
+      ).toEqual([
+        { user_id: "user-a", generation: 1 },
+        { user_id: "user-b", generation: 2 },
+      ]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should reject an operation-id collision without mutating the stored operation", () => {
+    const store = new SqliteStore(":memory:");
+    const original = testOperation();
+    const conflicting = testOperation({
+      payload: {
+        holding: {
+          ...(original.payload as { holding: Record<string, unknown> }).holding,
+          quantity: 2,
+        },
+      },
+    });
+
+    try {
+      const initial = syncOperations(store, "user-a", [original]);
+      expect(() =>
+        store.sync(
+          "user-a",
+          {
+            generation: initial.generation,
+            operations: [conflicting],
+          },
+          SYNC_OPTIONS,
+        ),
+      ).toThrow(SyncOperationConflictError);
+
+      const stored = store.sync(
+        "user-a",
+        { generation: initial.generation, operations: [] },
+        SYNC_OPTIONS,
+      );
+      expect(stored.events).toHaveLength(1);
+      expect(stored.events[0]?.payload).toEqual(original.payload);
+      expect(
+        store.database
+          .prepare("SELECT COUNT(*) AS count FROM sync_events")
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should allow an exact enrollment retry after later operations exist", () => {
+    const store = new SqliteStore(":memory:");
+    const adopted = testOperation({ id: "operation-adopted" });
+    const adoptedSecond = distinctAddedOperation(
+      "operation-adopted-second",
+      "holding-adopted-second",
+    );
+    const unrelated = distinctAddedOperation(
+      "operation-unrelated",
+      "holding-unrelated",
+    );
+    const newEnrollment = distinctAddedOperation(
+      "operation-new-enrollment",
+      "holding-new-enrollment",
+    );
+
+    try {
+      const bootstrap = store.sync(
+        "user-a",
+        { generation: null, operations: [] },
+        SYNC_OPTIONS,
+      );
+      const first = store.sync(
+        "user-a",
+        {
+          generation: bootstrap.generation,
+          requireEmpty: true,
+          operations: [adopted, adoptedSecond],
+        },
+        SYNC_OPTIONS,
+      );
+      const later = store.sync(
+        "user-a",
+        {
+          cursor: first.cursor,
+          generation: bootstrap.generation,
+          operations: [unrelated],
+        },
+        SYNC_OPTIONS,
+      );
+      const retry = store.sync(
+        "user-a",
+        {
+          cursor: later.cursor,
+          generation: bootstrap.generation,
+          requireEmpty: true,
+          operations: [adopted, adoptedSecond],
+        },
+        SYNC_OPTIONS,
+      );
+
+      expect(retry.acceptedOperationIds).toEqual([
+        adopted.id,
+        adoptedSecond.id,
+      ]);
+      expect(retry.events).toEqual([]);
+      expect(() =>
+        store.sync(
+          "user-a",
+          {
+            generation: bootstrap.generation,
+            requireEmpty: true,
+            operations: [newEnrollment],
+          },
+          SYNC_OPTIONS,
+        ),
+      ).toThrow(SyncEnrollmentConflictError);
+      expect(
+        store.database
+          .prepare(
+            `SELECT operation_id
+             FROM sync_events
+             ORDER BY sequence`,
+          )
+          .all(),
+      ).toEqual([
+        { operation_id: adopted.id },
+        { operation_id: adoptedSecond.id },
+        { operation_id: unrelated.id },
+      ]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should reject non-canonical or unsafe sync generation strings", () => {
+    const store = new SqliteStore(":memory:");
+
+    try {
+      for (const generation of ["0", "01", "9007199254740992"]) {
+        expect(() =>
+          store.sync("user-a", { generation, operations: [] }, SYNC_OPTIONS),
+        ).toThrow(/generation/i);
+      }
+      expect(
+        store.database
+          .prepare("SELECT COUNT(*) AS count FROM sync_accounts")
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should allocate an absent-account epoch only from trusted server state", () => {
+    const store = new SqliteStore(":memory:");
+
+    try {
+      let mismatch: unknown;
+      try {
+        store.sync(
+          "poison-attempt",
+          {
+            generation: "9007199254740990",
+            operations: [],
+          },
+          SYNC_OPTIONS,
+        );
+      } catch (error) {
+        mismatch = error;
+      }
+      expect(mismatch).toBeInstanceOf(SyncGenerationMismatchError);
+      expect((mismatch as SyncGenerationMismatchError).currentGeneration).toBe(
+        "1",
+      );
+      expect(
+        store.database
+          .prepare(
+            `SELECT integer_value
+             FROM sync_metadata
+             WHERE metadata_key = 'last_generation'`,
+          )
+          .get(),
+      ).toEqual({ integer_value: 1 });
+
+      const healthy = store.sync(
+        "healthy-user",
+        { generation: null, operations: [] },
+        SYNC_OPTIONS,
+      );
+      expect(healthy.generation).toBe("2");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should enforce the account cap on bootstrap, stale tombstones, and deletion", () => {
+    const store = new SqliteStore(":memory:");
+    const capped = { ...SYNC_OPTIONS, maxAccounts: 1 };
+
+    try {
+      store.sync(
+        "capacity-owner",
+        { generation: null, operations: [] },
+        capped,
+      );
+      expect(() =>
+        store.sync(
+          "bootstrap-over-capacity",
+          { generation: null, operations: [] },
+          capped,
+        ),
+      ).toThrow(SyncStorageLimitError);
+      expect(() =>
+        store.sync(
+          "stale-over-capacity",
+          { generation: "999999", operations: [] },
+          capped,
+        ),
+      ).toThrow(SyncStorageLimitError);
+      expect(() => store.deleteAccount("delete-over-capacity", capped)).toThrow(
+        SyncStorageLimitError,
+      );
+      expect(
+        store.database.prepare("SELECT user_id FROM sync_accounts").all(),
+      ).toEqual([{ user_id: "capacity-owner" }]);
+      expect(
+        store.database
+          .prepare(
+            `SELECT integer_value
+             FROM sync_metadata
+             WHERE metadata_key = 'last_generation'`,
+          )
+          .get(),
+      ).toEqual({ integer_value: 1 });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should reject quantity operations that exceed the authoritative holding bounds", () => {
+    const store = new SqliteStore(":memory:");
+    const added = testOperation();
+    const overflow = testOperation({
+      id: "operation-overflow",
+      type: "holding.quantity-adjusted",
+      payload: { delta: 100_000 },
+    });
+
+    try {
+      const initial = syncOperations(store, "user-a", [added]);
+      expect(() =>
+        store.sync(
+          "user-a",
+          {
+            generation: initial.generation,
+            operations: [overflow],
+          },
+          SYNC_OPTIONS,
+        ),
+      ).toThrow(SyncOperationInvalidError);
+      expect(
+        store.database
+          .prepare("SELECT COUNT(*) AS count FROM sync_events")
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should reject updates and removals for unknown holdings", () => {
+    const store = new SqliteStore(":memory:");
+    const bootstrap = store.sync(
+      "user-a",
+      { generation: null, operations: [] },
+      SYNC_OPTIONS,
+    );
+    const unknownUpdate = testOperation({
+      id: "operation-update-unknown",
+      type: "holding.updated",
+      holdingId: "holding-unknown",
+      payload: { note: "unknown" },
+    });
+    const unknownRemoval = testOperation({
+      id: "operation-remove-unknown",
+      type: "holding.removed",
+      holdingId: "holding-unknown",
+      payload: {},
+    });
+
+    try {
+      for (const operation of [unknownUpdate, unknownRemoval]) {
+        expect(() =>
+          store.sync(
+            "user-a",
+            {
+              generation: bootstrap.generation,
+              operations: [operation],
+            },
+            SYNC_OPTIONS,
+          ),
+        ).toThrow(SyncOperationInvalidError);
+      }
+      expect(
+        store.database
+          .prepare("SELECT COUNT(*) AS count FROM sync_events")
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should never reuse a holding identifier after removal", () => {
+    const store = new SqliteStore(":memory:");
+    const added = testOperation();
+    const removed = testOperation({
+      id: "operation-remove",
+      type: "holding.removed",
+      payload: {},
+    });
+    const readded = testOperation({ id: "operation-readd" });
+
+    try {
+      const initial = syncOperations(store, "user-a", [added, removed]);
+      expect(() =>
+        store.sync(
+          "user-a",
+          {
+            generation: initial.generation,
+            operations: [readded],
+          },
+          SYNC_OPTIONS,
+        ),
+      ).toThrow(SyncOperationInvalidError);
+      expect(
+        store.database
+          .prepare("SELECT COUNT(*) AS count FROM sync_events")
+          .get(),
+      ).toEqual({ count: 2 });
     } finally {
       store.close();
     }
@@ -348,11 +743,10 @@ describe("SQLite store", () => {
     const operation = richAddedOperation();
 
     try {
-      const response = store.sync(
-        "user-a",
-        { operations: [operation] },
-        { retentionDays: 1_826, now: FIXED_NOW },
-      );
+      const response = syncOperations(store, "user-a", [operation], {
+        retentionDays: 1_826,
+        now: FIXED_NOW,
+      });
       const stored = store.database
         .prepare(
           `SELECT operation_json, stored_bytes, card_snapshot_id, quote_snapshot_id
@@ -377,6 +771,17 @@ describe("SQLite store", () => {
       expect(stored.card_snapshot_id).not.toBeNull();
       expect(stored.quote_snapshot_id).not.toBeNull();
       expect(response.events[0].payload).toEqual(operation.payload);
+      expect(
+        store.sync(
+          "user-a",
+          {
+            cursor: response.cursor,
+            generation: response.generation,
+            operations: [{ ...operation, syncedAt: FIXED_NOW.toISOString() }],
+          },
+          SYNC_OPTIONS,
+        ).acceptedOperationIds,
+      ).toEqual([operation.id]);
       expect(holding).toMatchObject({
         id: operation.holdingId,
         cardId: "pokemon-card:en:base1:58:pikachu",
@@ -435,15 +840,11 @@ describe("SQLite store", () => {
             `density-${String(batch * 100 + offset).padStart(4, "0")}`,
           ),
         );
-        store.sync(
-          "density-user",
-          { operations },
-          {
-            retentionDays: 1_826,
-            maxPullBytes: 1,
-            now: FIXED_NOW,
-          },
-        );
+        syncOperations(store, "density-user", operations, {
+          retentionDays: 1_826,
+          maxPullBytes: 1,
+          now: FIXED_NOW,
+        });
       }
       store.database.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
       const bytesPerAdd = (usedBytes() - before) / 1_000;
@@ -465,16 +866,14 @@ describe("SQLite store", () => {
     const operation = richAddedOperation();
 
     try {
-      store.sync(
-        "user-a",
-        { operations: [operation] },
-        { retentionDays: 1_826, now: FIXED_NOW },
-      );
-      store.sync(
-        "user-b",
-        { operations: [operation] },
-        { retentionDays: 1_826, now: FIXED_NOW },
-      );
+      syncOperations(store, "user-a", [operation], {
+        retentionDays: 1_826,
+        now: FIXED_NOW,
+      });
+      syncOperations(store, "user-b", [operation], {
+        retentionDays: 1_826,
+        now: FIXED_NOW,
+      });
 
       expect(
         store.database
@@ -499,13 +898,13 @@ describe("SQLite store", () => {
           .get(),
       ).toMatchObject({ cards: 1, quotes: 1 });
 
-      store.deleteAccount("user-a");
+      store.deleteAccount("user-a", SYNC_OPTIONS);
       expect(
         store.database
           .prepare("SELECT COUNT(*) AS count FROM sync_shared_objects")
           .get(),
       ).toMatchObject({ count: 2 });
-      store.deleteAccount("user-b");
+      store.deleteAccount("user-b", SYNC_OPTIONS);
       expect(
         store.database
           .prepare("SELECT COUNT(*) AS count FROM sync_shared_objects")
@@ -522,21 +921,17 @@ describe("SQLite store", () => {
 
     try {
       expect(() =>
-        store.sync(
-          "quota-user",
-          { operations: [operation] },
-          {
-            retentionDays: 1_826,
-            maxAccountBytes: 1_000,
-            now: FIXED_NOW,
-          },
-        ),
+        syncOperations(store, "quota-user", [operation], {
+          retentionDays: 1_826,
+          maxAccountBytes: 1_000,
+          now: FIXED_NOW,
+        }),
       ).toThrow(SyncStorageLimitError);
       expect(
         store.database
           .prepare("SELECT COUNT(*) AS count FROM sync_accounts")
           .get(),
-      ).toMatchObject({ count: 0 });
+      ).toMatchObject({ count: 1 });
       expect(
         store.database
           .prepare("SELECT COUNT(*) AS count FROM sync_shared_objects")
@@ -553,15 +948,11 @@ describe("SQLite store", () => {
     const second = largeSharedObjectOperation("shared-quota-b");
 
     try {
-      const response = store.sync(
-        "quota-user",
-        { operations: [first, second] },
-        {
-          retentionDays: 1_826,
-          maxAccountBytes: 8_000,
-          now: FIXED_NOW,
-        },
-      );
+      const response = syncOperations(store, "quota-user", [first, second], {
+        retentionDays: 1_826,
+        maxAccountBytes: 8_000,
+        now: FIXED_NOW,
+      });
 
       expect(response.acceptedOperationIds).toEqual([first.id, second.id]);
       const bytes = store.database
@@ -596,32 +987,24 @@ describe("SQLite store", () => {
     const operation = largeSharedObjectOperation("globally-shared-object");
 
     try {
-      store.sync(
-        "first-user",
-        { operations: [operation] },
-        {
-          retentionDays: 1_826,
-          maxAccountBytes: 64 * 1024,
-          now: FIXED_NOW,
-        },
-      );
+      syncOperations(store, "first-user", [operation], {
+        retentionDays: 1_826,
+        maxAccountBytes: 64 * 1024,
+        now: FIXED_NOW,
+      });
 
       expect(() =>
-        store.sync(
-          "second-user",
-          { operations: [operation] },
-          {
-            retentionDays: 1_826,
-            maxAccountBytes: 1_000,
-            now: FIXED_NOW,
-          },
-        ),
+        syncOperations(store, "second-user", [operation], {
+          retentionDays: 1_826,
+          maxAccountBytes: 1_000,
+          now: FIXED_NOW,
+        }),
       ).toThrow(SyncStorageLimitError);
       expect(
         store.database
           .prepare("SELECT user_id FROM sync_accounts ORDER BY user_id")
           .all(),
-      ).toEqual([{ user_id: "first-user" }]);
+      ).toEqual([{ user_id: "first-user" }, { user_id: "second-user" }]);
       expect(
         store.database
           .prepare("SELECT COUNT(*) AS count FROM sync_shared_objects")
@@ -651,24 +1034,29 @@ describe("SQLite store", () => {
     });
 
     try {
-      const response = store.sync(
+      const response = syncOperations(
+        store,
         "user-a",
-        { operations: [operation] },
-        { retentionDays: 1_826, now: FIXED_NOW },
+        [testOperation(), operation],
+        {
+          retentionDays: 1_826,
+          now: FIXED_NOW,
+        },
       );
       const stored = store.database
         .prepare(
           `SELECT operation_json, quote_snapshot_id
-           FROM sync_events`,
+           FROM sync_events
+           WHERE operation_id = ?`,
         )
-        .get() as {
+        .get(operation.id) as {
         operation_json: string;
         quote_snapshot_id: number | null;
       };
 
       expect(stored.operation_json).toBe('{"note":"repriced"}');
       expect(stored.quote_snapshot_id).not.toBeNull();
-      expect(response.events[0].payload).toEqual({
+      expect(response.events[1].payload).toEqual({
         note: "repriced",
         quote,
       });
@@ -740,13 +1128,22 @@ describe("SQLite store", () => {
         stored_bytes: number;
         operation_json: string;
       };
+      const migratedAccount = store.database
+        .prepare(
+          `SELECT generation
+           FROM sync_accounts
+           WHERE user_id = ?`,
+        )
+        .get("legacy-user");
       const response = store.sync(
         "legacy-user",
-        { cursor: null, operations: [] },
+        { cursor: null, generation: null, operations: [] },
         { retentionDays: 1_826, now: FIXED_NOW },
       );
 
       expect(migrated.storage_version).toBe(1);
+      expect(migratedAccount).toEqual({ generation: 1 });
+      expect(response.generation).toBe("1");
       expect(migrated.stored_bytes).toBeLessThanOrEqual(700);
       expect(migrated.operation_json).not.toContain('"card"');
       expect(response.events[0]).toMatchObject({
@@ -768,18 +1165,23 @@ describe("SQLite store", () => {
 
   it("should page events without losing the cursor when there are more results", () => {
     const store = new SqliteStore(":memory:");
-    const firstOperation = testOperation({ id: "operation-1" });
-    const secondOperation = testOperation({ id: "operation-2" });
+    const firstOperation = distinctAddedOperation("operation-1", "holding-1");
+    const secondOperation = distinctAddedOperation("operation-2", "holding-2");
 
     try {
-      const firstPage = store.sync(
+      const firstPage = syncOperations(
+        store,
         "user-a",
-        { operations: [firstOperation, secondOperation] },
+        [firstOperation, secondOperation],
         { retentionDays: 1_826, eventLimit: 1, now: FIXED_NOW },
       );
       const secondPage = store.sync(
         "user-a",
-        { cursor: firstPage.cursor, operations: [] },
+        {
+          cursor: firstPage.cursor,
+          generation: firstPage.generation,
+          operations: [],
+        },
         { retentionDays: 1_826, eventLimit: 1, now: FIXED_NOW },
       );
 
@@ -804,17 +1206,17 @@ describe("SQLite store", () => {
 
     try {
       expect(() =>
-        store.sync(
-          "user-a",
-          { operations: [operation] },
-          { retentionDays: 1_826, maxOperationBytes: 512, now: FIXED_NOW },
-        ),
+        syncOperations(store, "user-a", [operation], {
+          retentionDays: 1_826,
+          maxOperationBytes: 512,
+          now: FIXED_NOW,
+        }),
       ).toThrow(SyncOperationTooLargeError);
       expect(
         store.database
           .prepare("SELECT COUNT(*) AS count FROM sync_accounts")
           .get(),
-      ).toMatchObject({ count: 0 });
+      ).toMatchObject({ count: 1 });
     } finally {
       store.close();
     }
@@ -822,19 +1224,15 @@ describe("SQLite store", () => {
 
   it("should preserve prior events when the account byte quota rejects a new operation", () => {
     const store = new SqliteStore(":memory:");
-    const first = testOperation({ id: "operation-1" });
-    const second = testOperation({ id: "operation-2" });
+    const first = distinctAddedOperation("operation-1", "holding-1");
+    const second = distinctAddedOperation("operation-2", "holding-2");
 
     try {
-      store.sync(
-        "user-a",
-        { operations: [first] },
-        {
-          retentionDays: 1_826,
-          maxAccountBytes: 64 * 1024,
-          now: FIXED_NOW,
-        },
-      );
+      const initial = syncOperations(store, "user-a", [first], {
+        retentionDays: 1_826,
+        maxAccountBytes: 64 * 1024,
+        now: FIXED_NOW,
+      });
       const firstBytes = Number(
         (
           store.database
@@ -849,7 +1247,7 @@ describe("SQLite store", () => {
       expect(() =>
         store.sync(
           "user-a",
-          { operations: [second] },
+          { generation: initial.generation, operations: [second] },
           {
             retentionDays: 1_826,
             maxAccountBytes: firstBytes + 10,
@@ -867,25 +1265,33 @@ describe("SQLite store", () => {
 
   it("should keep a sync pull response below its byte budget", () => {
     const store = new SqliteStore(":memory:");
-    const operations = Array.from({ length: 5 }, (_, index) =>
-      testOperation({
+    const operations = Array.from({ length: 5 }, (_, index) => {
+      const operation = testOperation();
+      const holdingId = `holding-${index}`;
+      return testOperation({
         id: `operation-${index}`,
-        type: "holding.updated",
-        payload: { notes: "x".repeat(1_000), index },
-      }),
-    );
+        holdingId,
+        payload: {
+          holding: {
+            ...(
+              operation.payload as {
+                holding: Record<string, unknown>;
+              }
+            ).holding,
+            id: holdingId,
+            note: "x".repeat(1_000),
+          },
+        },
+      });
+    });
 
     try {
-      const response = store.sync(
-        "user-a",
-        { operations },
-        {
-          retentionDays: 1_826,
-          maxOperationBytes: 2_048,
-          maxPullBytes: 3_000,
-          now: FIXED_NOW,
-        },
-      );
+      const response = syncOperations(store, "user-a", operations, {
+        retentionDays: 1_826,
+        maxOperationBytes: 2_048,
+        maxPullBytes: 3_000,
+        now: FIXED_NOW,
+      });
 
       expect(
         Buffer.byteLength(JSON.stringify(response), "utf8"),
@@ -898,29 +1304,67 @@ describe("SQLite store", () => {
     }
   });
 
-  it("should transactionally delete an account and its event history", () => {
+  it("should transactionally delete events and reject stale generations", () => {
     const store = new SqliteStore(":memory:");
     const operation = testOperation();
+    const staleOperation = richAddedOperation("operation-stale");
 
     try {
-      store.sync(
-        "user-a",
-        { operations: [operation] },
-        { retentionDays: 1_826, now: FIXED_NOW },
-      );
-      store.sync(
-        "user-b",
-        { operations: [operation] },
-        { retentionDays: 1_826, now: FIXED_NOW },
-      );
+      const userA = syncOperations(store, "user-a", [operation], {
+        retentionDays: 1_826,
+        now: FIXED_NOW,
+      });
+      const userB = syncOperations(store, "user-b", [operation], {
+        retentionDays: 1_826,
+        now: FIXED_NOW,
+      });
 
-      expect(store.deleteAccount("user-a")).toBe(true);
-      expect(store.deleteAccount("user-a")).toBe(false);
+      const firstDeletion = store.deleteAccount("user-a", SYNC_OPTIONS);
+      expect(firstDeletion).toEqual({
+        accountExisted: true,
+        generation: "3",
+      });
+
+      let mismatch: unknown;
+      try {
+        store.sync(
+          "user-a",
+          { generation: userA.generation, operations: [staleOperation] },
+          SYNC_OPTIONS,
+        );
+      } catch (error) {
+        mismatch = error;
+      }
+      expect(mismatch).toBeInstanceOf(SyncGenerationMismatchError);
+      expect((mismatch as SyncGenerationMismatchError).currentGeneration).toBe(
+        "3",
+      );
+      expect(() =>
+        store.sync(
+          "user-a",
+          { generation: null, operations: [staleOperation] },
+          SYNC_OPTIONS,
+        ),
+      ).toThrow(/empty bootstrap/i);
+
+      const current = store.sync(
+        "user-a",
+        { generation: firstDeletion.generation, operations: [] },
+        SYNC_OPTIONS,
+      );
+      expect(current.generation).toBe("3");
+      expect(current.events).toEqual([]);
+
+      const secondDeletion = store.deleteAccount("user-a", SYNC_OPTIONS);
+      expect(secondDeletion).toEqual({
+        accountExisted: true,
+        generation: "4",
+      });
       expect(
         store.database
           .prepare("SELECT COUNT(*) AS count FROM sync_accounts")
           .get(),
-      ).toMatchObject({ count: 1 });
+      ).toMatchObject({ count: 2 });
       expect(
         store.database
           .prepare("SELECT COUNT(*) AS count FROM sync_events")
@@ -928,9 +1372,92 @@ describe("SQLite store", () => {
       ).toMatchObject({ count: 1 });
       expect(
         store.database
-          .prepare("SELECT user_id FROM sync_accounts ORDER BY user_id")
+          .prepare("SELECT COUNT(*) AS count FROM sync_shared_objects")
+          .get(),
+      ).toMatchObject({ count: 1 });
+      expect(
+        store.database
+          .prepare(
+            `SELECT user_id, generation
+             FROM sync_accounts
+             ORDER BY user_id`,
+          )
           .all(),
-      ).toEqual([{ user_id: "user-b" }]);
+      ).toEqual([
+        { user_id: "user-a", generation: 4 },
+        { user_id: "user-b", generation: Number(userB.generation) },
+      ]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should create a generation-two tombstone when deleting a missing account", () => {
+    const store = new SqliteStore(":memory:");
+
+    try {
+      expect(store.deleteAccount("missing-user", SYNC_OPTIONS)).toEqual({
+        accountExisted: false,
+        generation: "2",
+      });
+      expect(
+        store.database
+          .prepare(
+            `SELECT generation, retention_until
+             FROM sync_accounts
+             WHERE user_id = ?`,
+          )
+          .get("missing-user"),
+      ).toEqual({
+        generation: 2,
+        retention_until: "2031-07-22T12:00:00.000Z",
+      });
+      expect(() =>
+        store.sync(
+          "missing-user",
+          { generation: "1", operations: [testOperation()] },
+          SYNC_OPTIONS,
+        ),
+      ).toThrow(SyncGenerationMismatchError);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should leave data intact when generation can no longer increment safely", () => {
+    const store = new SqliteStore(":memory:");
+
+    try {
+      syncOperations(
+        store,
+        "max-generation-user",
+        [testOperation()],
+        SYNC_OPTIONS,
+      );
+      store.database
+        .prepare(
+          `UPDATE sync_accounts
+           SET generation = ?
+           WHERE user_id = ?`,
+        )
+        .run(Number.MAX_SAFE_INTEGER, "max-generation-user");
+
+      expect(() =>
+        store.deleteAccount("max-generation-user", SYNC_OPTIONS),
+      ).toThrow(/generation/i);
+      expect(
+        store.database
+          .prepare(
+            `SELECT generation,
+                    (SELECT COUNT(*) FROM sync_events) AS event_count
+             FROM sync_accounts
+             WHERE user_id = ?`,
+          )
+          .get("max-generation-user"),
+      ).toEqual({
+        generation: Number.MAX_SAFE_INTEGER,
+        event_count: 1,
+      });
     } finally {
       store.close();
     }
@@ -947,7 +1474,10 @@ describe("SQLite store", () => {
         "2031-07-22T12:00:00.000Z",
       );
 
-      expect(store.deleteAccount("large-account")).toBe(true);
+      expect(store.deleteAccount("large-account", SYNC_OPTIONS)).toEqual({
+        accountExisted: true,
+        generation: "2",
+      });
       expect(
         store.database
           .prepare("SELECT COUNT(*) AS count FROM sync_shared_objects")
@@ -964,21 +1494,18 @@ describe("SQLite store", () => {
     const afterTwoDays = new Date(FIXED_NOW.getTime() + 2 * 86_400_000);
 
     try {
-      store.sync(
-        "expired-a",
-        { operations: [operation] },
-        { retentionDays: 1, now: FIXED_NOW },
-      );
-      store.sync(
-        "expired-b",
-        { operations: [operation] },
-        { retentionDays: 1, now: FIXED_NOW },
-      );
-      store.sync(
-        "active-user",
-        { operations: [operation] },
-        { retentionDays: 10, now: FIXED_NOW },
-      );
+      syncOperations(store, "expired-a", [operation], {
+        retentionDays: 1,
+        now: FIXED_NOW,
+      });
+      syncOperations(store, "expired-b", [operation], {
+        retentionDays: 1,
+        now: FIXED_NOW,
+      });
+      syncOperations(store, "active-user", [operation], {
+        retentionDays: 10,
+        now: FIXED_NOW,
+      });
 
       expect(store.pruneExpiredAccounts(afterTwoDays, 1)).toBe(1);
       expect(
@@ -1002,6 +1529,215 @@ describe("SQLite store", () => {
           .prepare("SELECT COUNT(*) AS count FROM sync_events")
           .get(),
       ).toMatchObject({ count: 1 });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should allocate a new epoch after expiry and reject the old offline queue", () => {
+    const store = new SqliteStore(":memory:");
+    const afterTwoDays = new Date(FIXED_NOW.getTime() + 2 * 86_400_000);
+    const oldOperation = testOperation({ id: "operation-before-expiry" });
+    const staleOperation = testOperation({ id: "operation-from-stale-device" });
+
+    try {
+      const initial = syncOperations(store, "expired-user", [oldOperation], {
+        retentionDays: 1,
+        now: FIXED_NOW,
+      });
+      expect(store.pruneExpiredAccounts(afterTwoDays, 1)).toBe(1);
+
+      let mismatch: unknown;
+      try {
+        store.sync(
+          "expired-user",
+          {
+            generation: initial.generation,
+            operations: [staleOperation],
+          },
+          { retentionDays: 1_826, now: afterTwoDays },
+        );
+      } catch (error) {
+        mismatch = error;
+      }
+
+      expect(mismatch).toBeInstanceOf(SyncGenerationMismatchError);
+      const currentGeneration = Number(
+        (mismatch as SyncGenerationMismatchError).currentGeneration,
+      );
+      expect(currentGeneration).toBeGreaterThan(Number(initial.generation));
+      expect(
+        store.database
+          .prepare(
+            `SELECT generation,
+                    (SELECT COUNT(*) FROM sync_events) AS event_count
+             FROM sync_accounts
+             WHERE user_id = ?`,
+          )
+          .get("expired-user"),
+      ).toEqual({ generation: currentGeneration, event_count: 0 });
+
+      const bootstrap = store.sync(
+        "expired-user",
+        { generation: null, operations: [] },
+        { retentionDays: 1_826, now: afterTwoDays },
+      );
+      expect(bootstrap).toMatchObject({
+        generation: String(currentGeneration),
+        events: [],
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should expire the subject atomically even behind the bounded prune backlog", () => {
+    const store = new SqliteStore(":memory:");
+    const initialOptions = {
+      retentionDays: 1,
+      maxAccounts: 100,
+      now: FIXED_NOW,
+    } as const;
+    const afterTwoDays = new Date(FIXED_NOW.getTime() + 2 * 86_400_000);
+    const staleOptions = {
+      ...initialOptions,
+      now: afterTwoDays,
+    };
+    const targetUser = "expired-backlog-29";
+    let targetGeneration = "";
+    let targetHoldingId = "";
+
+    try {
+      for (let index = 0; index < 30; index += 1) {
+        const userId = `expired-backlog-${String(index).padStart(2, "0")}`;
+        const operation = testOperation();
+        const holdingId = `holding-backlog-${index}`;
+        const added = testOperation({
+          id: `operation-backlog-${index}`,
+          holdingId,
+          payload: {
+            holding: {
+              ...(
+                operation.payload as {
+                  holding: Record<string, unknown>;
+                }
+              ).holding,
+              id: holdingId,
+            },
+          },
+        });
+        const initial = syncOperations(store, userId, [added], initialOptions);
+        if (userId === targetUser) {
+          targetGeneration = initial.generation;
+          targetHoldingId = holdingId;
+        }
+      }
+
+      let mismatch: unknown;
+      try {
+        store.sync(
+          targetUser,
+          {
+            generation: targetGeneration,
+            operations: [
+              testOperation({
+                id: "operation-after-expiry",
+                type: "holding.quantity-adjusted",
+                holdingId: targetHoldingId,
+                payload: { delta: 1 },
+              }),
+            ],
+          },
+          staleOptions,
+        );
+      } catch (error) {
+        mismatch = error;
+      }
+
+      expect(mismatch).toBeInstanceOf(SyncGenerationMismatchError);
+      const currentGeneration = (mismatch as SyncGenerationMismatchError)
+        .currentGeneration;
+      expect(Number(currentGeneration)).toBeGreaterThan(
+        Number(targetGeneration),
+      );
+      expect(
+        store.database
+          .prepare(
+            `SELECT generation, retention_until
+             FROM sync_accounts
+             WHERE user_id = ?`,
+          )
+          .get(targetUser),
+      ).toEqual({
+        generation: Number(currentGeneration),
+        retention_until: new Date(
+          afterTwoDays.getTime() + 86_400_000,
+        ).toISOString(),
+      });
+      expect(
+        store.database
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM sync_events
+             WHERE user_id = ?`,
+          )
+          .get(targetUser),
+      ).toEqual({ count: 0 });
+      expect(
+        store.database
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM sync_events
+             WHERE operation_id = ?`,
+          )
+          .get("operation-after-expiry"),
+      ).toEqual({ count: 0 });
+
+      const bootstrap = store.sync(
+        targetUser,
+        { generation: null, operations: [] },
+        staleOptions,
+      );
+      expect(bootstrap).toMatchObject({
+        generation: currentGeneration,
+        events: [],
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should never reuse an expired epoch when a fresh device bootstraps first", () => {
+    const store = new SqliteStore(":memory:");
+    const afterTwoDays = new Date(FIXED_NOW.getTime() + 2 * 86_400_000);
+
+    try {
+      const initial = syncOperations(
+        store,
+        "fresh-after-expiry",
+        [testOperation()],
+        { retentionDays: 1, now: FIXED_NOW },
+      );
+      expect(store.pruneExpiredAccounts(afterTwoDays, 1)).toBe(1);
+
+      const fresh = store.sync(
+        "fresh-after-expiry",
+        { generation: null, operations: [] },
+        { retentionDays: 1_826, now: afterTwoDays },
+      );
+      expect(Number(fresh.generation)).toBeGreaterThan(
+        Number(initial.generation),
+      );
+      expect(() =>
+        store.sync(
+          "fresh-after-expiry",
+          {
+            generation: initial.generation,
+            operations: [testOperation({ id: "stale-after-fresh-bootstrap" })],
+          },
+          { retentionDays: 1_826, now: afterTwoDays },
+        ),
+      ).toThrow(SyncGenerationMismatchError);
     } finally {
       store.close();
     }

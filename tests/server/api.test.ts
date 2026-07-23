@@ -12,6 +12,11 @@ import {
 } from "../../server/auth.js";
 import { CatalogueService } from "../../server/catalog/service.js";
 import { SqliteStore } from "../../server/store.js";
+import { isCollectionEvent } from "../../src/lib/db.js";
+import {
+  CatalogueProviderError,
+  type CatalogueAdapter,
+} from "../../server/catalog/adapters.js";
 import {
   RecognitionBusyError,
   type RecognitionEngine,
@@ -40,6 +45,7 @@ function testDependencies(
     staticRoot?: string | null;
     configure?: (config: ReturnType<typeof testConfig>) => void;
     recognizer?: RecognitionEngine;
+    catalogueSearch?: CatalogueAdapter["search"];
   } = {},
 ) {
   const config = testConfig();
@@ -65,9 +71,12 @@ function testDependencies(
       },
     ],
   });
+  const catalogueSearch = vi.fn(
+    options.catalogueSearch ?? (async () => [card]),
+  );
   const catalogue = new CatalogueService({
     primary: testAdapter("tcgdex", {
-      search: vi.fn(async () => [card]),
+      search: catalogueSearch,
       getCard: vi.fn(async () => detailCard),
     }),
     secondary: testAdapter("pokemon_tcg"),
@@ -106,6 +115,7 @@ function testDependencies(
   };
   return {
     store,
+    catalogueSearch,
     app: createApp({
       config,
       store,
@@ -114,6 +124,19 @@ function testDependencies(
       recognizer,
     }),
   };
+}
+
+async function bootstrapGeneration(
+  app: ReturnType<typeof testDependencies>["app"],
+): Promise<string> {
+  const response = await app.request("/api/sync", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ generation: null, operations: [] }),
+  });
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as { generation: string };
+  return body.generation;
 }
 
 describe("CardScope API", () => {
@@ -242,6 +265,223 @@ describe("CardScope API", () => {
       expect(JSON.stringify(body)).not.toContain("rawText");
     } finally {
       store.close();
+    }
+  });
+
+  it("should search both languages in parallel and interleave a bounded deduplicated result", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const english = Array.from({ length: 13 }, (_, index) =>
+      testCard({
+        id: `pokemon-card:en:set:${index}:card-${index}`,
+        name: `Card ${index}`,
+        number: String(index),
+      }),
+    );
+    const french = Array.from({ length: 13 }, (_, index) =>
+      testCard({
+        id: `pokemon-card:fr:set:${index}:carte-${index}`,
+        name: `Carte ${index}`,
+        number: String(index),
+        language: "fr",
+      }),
+    );
+    french[1] = french[0];
+    const { app, store, catalogueSearch } = testDependencies({
+      catalogueSearch: async (_query, language) => {
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await Promise.resolve();
+        active -= 1;
+        return language === "fr" ? french : english;
+      },
+    });
+    try {
+      const response = await app.request("/api/recognition/cards", {
+        method: "POST",
+        headers: { "content-type": "image/jpeg" },
+        body: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+      });
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(maximumActive).toBe(2);
+      expect(catalogueSearch).toHaveBeenCalledTimes(2);
+      expect(
+        catalogueSearch.mock.calls.map((call) => [call[1], call[2]]),
+      ).toEqual([
+        ["en", 12],
+        ["fr", 12],
+      ]);
+      expect(body.cards).toHaveLength(23);
+      expect(body.cards.length).toBeLessThanOrEqual(24);
+      expect(
+        body.cards
+          .slice(0, 3)
+          .map((card: { language: string }) => card.language),
+      ).toEqual(["en", "fr", "en"]);
+      expect(
+        body.cards.filter((card: { id: string }) => card.id === french[0].id),
+      ).toHaveLength(1);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should fail closed when either automatic language search is unavailable", async () => {
+    const { app, store, catalogueSearch } = testDependencies({
+      catalogueSearch: async (_query, language) => {
+        if (language === "fr") {
+          throw new CatalogueProviderError("tcgdex", "French catalogue down");
+        }
+        return [testCard()];
+      },
+    });
+    try {
+      const response = await app.request(
+        "/api/recognition/cards?language=auto",
+        {
+          method: "POST",
+          headers: { "content-type": "image/jpeg" },
+          body: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+        },
+      );
+
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({
+        error: { code: "catalogue_unavailable" },
+      });
+      expect(catalogueSearch).toHaveBeenCalledTimes(2);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should propagate request cancellation to the recognition engine", async () => {
+    let receivedSignal: AbortSignal | undefined;
+    let startedRecognition!: () => void;
+    const started = new Promise<void>((resolve) => {
+      startedRecognition = resolve;
+    });
+    const recognize = vi.fn(
+      async (
+        _image: Uint8Array,
+        options?: { signal?: AbortSignal },
+      ): Promise<never> => {
+        receivedSignal = options?.signal;
+        startedRecognition();
+        return new Promise<never>((_resolve, reject) => {
+          options?.signal?.addEventListener(
+            "abort",
+            () => reject(options.signal?.reason),
+            { once: true },
+          );
+        });
+      },
+    );
+    const { app, store } = testDependencies({
+      recognizer: { recognize, async close() {} },
+    });
+    const controller = new AbortController();
+    try {
+      const request = new Request("http://cards.test/api/recognition/cards", {
+        method: "POST",
+        headers: { "content-type": "image/jpeg" },
+        body: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+      });
+      Object.defineProperty(request, "signal", {
+        configurable: true,
+        value: controller.signal,
+      });
+      const responsePromise = app.fetch(request);
+      await started;
+      controller.abort();
+      const response = await responsePromise;
+
+      expect(receivedSignal?.aborted).toBe(true);
+      expect(response.status).toBe(408);
+      expect(await response.json()).toMatchObject({
+        error: { code: "recognition_cancelled" },
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should enforce the end-to-end recognition deadline", async () => {
+    vi.useFakeTimers();
+    let startedRecognition!: () => void;
+    const started = new Promise<void>((resolve) => {
+      startedRecognition = resolve;
+    });
+    const recognize = vi.fn(
+      async (
+        _image: Uint8Array,
+        options?: { signal?: AbortSignal },
+      ): Promise<never> => {
+        startedRecognition();
+        return new Promise<never>((_resolve, reject) => {
+          options?.signal?.addEventListener(
+            "abort",
+            () => reject(options.signal?.reason),
+            { once: true },
+          );
+        });
+      },
+    );
+    const { app, store } = testDependencies({
+      recognizer: { recognize, async close() {} },
+    });
+    try {
+      const responsePromise = app.request(
+        "/api/recognition/cards?language=auto",
+        {
+          method: "POST",
+          headers: { "content-type": "image/jpeg" },
+          body: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+        },
+      );
+      await started;
+      await vi.advanceTimersByTimeAsync(35_000);
+      const response = await responsePromise;
+
+      expect(response.status).toBe(504);
+      expect(await response.json()).toMatchObject({
+        error: { code: "recognition_timeout" },
+      });
+    } finally {
+      store.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("should keep the end-to-end deadline while catalogue lookup is pending", async () => {
+    vi.useFakeTimers();
+    const { app, store, catalogueSearch } = testDependencies({
+      catalogueSearch: async () => new Promise<never>(() => undefined),
+    });
+    try {
+      const responsePromise = app.request(
+        "/api/recognition/cards?language=auto",
+        {
+          method: "POST",
+          headers: { "content-type": "image/jpeg" },
+          body: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+        },
+      );
+      await vi.waitFor(() => {
+        expect(catalogueSearch).toHaveBeenCalledTimes(2);
+      });
+      await vi.advanceTimersByTimeAsync(35_000);
+      const response = await responsePromise;
+
+      expect(response.status).toBe(504);
+      expect(await response.json()).toMatchObject({
+        error: { code: "recognition_timeout" },
+      });
+    } finally {
+      store.close();
+      vi.useRealTimers();
     }
   });
 
@@ -444,7 +684,7 @@ describe("CardScope API", () => {
         type: "holding.updated",
         holdingId: added.holdingId,
         occurredAt: "2026-07-22T12:02:00.000Z",
-        payload: { note: "Binder A", futureClientField: { preserved: true } },
+        payload: { note: "Binder A" },
       },
       {
         id: "operation-4",
@@ -456,26 +696,33 @@ describe("CardScope API", () => {
       },
     ];
     try {
+      expect(operations.every(isCollectionEvent)).toBe(true);
+      const generation = await bootstrapGeneration(app);
       const firstResponse = await app.request("/api/sync", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ cursor: null, operations }),
+        body: JSON.stringify({ cursor: null, generation, operations }),
       });
       const first = await firstResponse.json();
       const duplicateResponse = await app.request("/api/sync", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ cursor: first.cursor, operations }),
+        body: JSON.stringify({
+          cursor: first.cursor,
+          generation: first.generation,
+          operations,
+        }),
       });
       const duplicate = await duplicateResponse.json();
       const pullResponse = await app.request(
-        `/api/sync?cursor=${first.cursor}`,
+        `/api/sync?cursor=${first.cursor}&generation=${first.generation}`,
       );
       const pull = await pullResponse.json();
 
       expect(firstResponse.status).toBe(200);
       expect(first).toMatchObject({
         acceptedOperationIds: operations.map((operation) => operation.id),
+        generation: "1",
         hasMore: false,
       });
       expect(first.events).toHaveLength(4);
@@ -487,15 +734,127 @@ describe("CardScope API", () => {
           "holding.removed",
         ],
       );
-      expect(first.events[2].payload).toEqual({
-        note: "Binder A",
-        futureClientField: { preserved: true },
-      });
+      expect(first.events[2].payload).toEqual({ note: "Binder A" });
       expect(duplicateResponse.status).toBe(200);
-      expect(duplicate.acceptedOperationIds).toEqual([]);
+      expect(duplicate.generation).toBe("1");
+      expect(duplicate.acceptedOperationIds).toEqual(
+        operations.map((operation) => operation.id),
+      );
       expect(duplicate.events).toEqual([]);
       expect(pullResponse.status).toBe(200);
+      expect(pull.generation).toBe("1");
       expect(pull.events).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should reject a conflicting reuse of an operation identifier", async () => {
+    const { app, store } = testDependencies();
+    const original = testOperation();
+    const conflicting = testOperation({
+      payload: {
+        holding: {
+          ...(original.payload as { holding: Record<string, unknown> }).holding,
+          quantity: 2,
+        },
+      },
+    });
+
+    try {
+      const generation = await bootstrapGeneration(app);
+      const first = await app.request("/api/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ generation, operations: [original] }),
+      });
+      const conflict = await app.request("/api/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ generation, operations: [conflicting] }),
+      });
+
+      expect(first.status).toBe(200);
+      expect(conflict.status).toBe(409);
+      expect(await conflict.json()).toMatchObject({
+        error: {
+          code: "sync_operation_conflict",
+          operationId: original.id,
+        },
+      });
+      expect(
+        store.database
+          .prepare("SELECT COUNT(*) AS count FROM sync_events")
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should atomically require empty enrollment and keep its exact retry idempotent", async () => {
+    const { app, store } = testDependencies();
+    const adopted = testOperation({ id: "operation-adopted" });
+    const unrelated = testOperation({
+      id: "operation-unrelated",
+      holdingId: "holding-unrelated",
+      payload: {
+        holding: {
+          ...(adopted.payload as { holding: Record<string, unknown> }).holding,
+          id: "holding-unrelated",
+        },
+      },
+    });
+
+    try {
+      const generation = await bootstrapGeneration(app);
+      const firstResponse = await app.request("/api/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          generation,
+          requireEmpty: true,
+          operations: [adopted],
+        }),
+      });
+      const first = await firstResponse.json();
+      const retryResponse = await app.request("/api/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          cursor: first.cursor,
+          generation,
+          requireEmpty: true,
+          operations: [adopted],
+        }),
+      });
+      const conflictResponse = await app.request("/api/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          generation,
+          requireEmpty: true,
+          operations: [unrelated],
+        }),
+      });
+
+      expect(firstResponse.status).toBe(200);
+      expect(retryResponse.status).toBe(200);
+      expect(await retryResponse.json()).toMatchObject({
+        acceptedOperationIds: [adopted.id],
+        events: [],
+      });
+      expect(conflictResponse.status).toBe(409);
+      expect(await conflictResponse.json()).toEqual({
+        error: {
+          code: "sync_enrollment_conflict",
+          message: "Cloud enrollment requires an empty remote collection",
+          currentEventCount: 1,
+        },
+      });
+      expect(
+        store.database.prepare("SELECT operation_id FROM sync_events").all(),
+      ).toEqual([{ operation_id: adopted.id }]);
     } finally {
       store.close();
     }
@@ -516,13 +875,41 @@ describe("CardScope API", () => {
       const response = await app.request("/api/sync", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ operations: [operation] }),
+        body: JSON.stringify({ generation: "1", operations: [operation] }),
       });
       const body = await response.json();
 
       expect(response.status).toBe(400);
       expect(body.error).toMatchObject({ code: "invalid_request" });
       expect(body.error.details[0].path).toContain("delta");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should reject malformed or unsafe sync generations", async () => {
+    const { app, store } = testDependencies();
+
+    try {
+      for (const generation of ["0", "01", "9007199254740992", 1]) {
+        const response = await app.request("/api/sync", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ generation, operations: [] }),
+        });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({
+          error: { code: "invalid_request" },
+        });
+      }
+
+      const pullResponse = await app.request("/api/sync?generation=01");
+      expect(pullResponse.status).toBe(400);
+      expect(
+        store.database
+          .prepare("SELECT COUNT(*) AS count FROM sync_accounts")
+          .get(),
+      ).toEqual({ count: 0 });
     } finally {
       store.close();
     }
@@ -564,15 +951,26 @@ describe("CardScope API", () => {
         config.sync.maxOperationBytes = 512;
       },
     });
+    const baseOperation = testOperation();
     const operation = testOperation({
-      payload: { holding: { notes: "x".repeat(1_000) } },
+      payload: {
+        holding: {
+          ...(
+            baseOperation.payload as {
+              holding: Record<string, unknown>;
+            }
+          ).holding,
+          note: "x".repeat(1_000),
+        },
+      },
     });
 
     try {
+      const generation = await bootstrapGeneration(app);
       const response = await app.request("/api/sync", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ operations: [operation] }),
+        body: JSON.stringify({ generation, operations: [operation] }),
       });
 
       expect(response.status).toBe(413);
@@ -589,33 +987,28 @@ describe("CardScope API", () => {
     }
   });
 
-  it("should reject an account event quota atomically", async () => {
-    const { app, store } = testDependencies({
-      configure(config) {
-        config.sync.maxAccountEvents = 1;
-      },
-    });
-    const operations = [
-      testOperation({ id: "operation-1" }),
-      testOperation({ id: "operation-2" }),
-    ];
+  it("should reject a client-unreplayable holding snapshot before persistence", async () => {
+    const { app, store } = testDependencies();
+    const operation = testOperation();
+    const holding = (
+      operation.payload as {
+        holding: { card: Record<string, unknown> };
+      }
+    ).holding;
+    delete holding.card.name;
 
     try {
+      const generation = await bootstrapGeneration(app);
       const response = await app.request("/api/sync", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ operations }),
+        body: JSON.stringify({ generation, operations: [operation] }),
       });
 
-      expect(response.status).toBe(507);
+      expect(response.status).toBe(400);
       expect(await response.json()).toMatchObject({
-        error: { code: "sync_storage_limit", limit: "events" },
+        error: { code: "invalid_request" },
       });
-      expect(
-        store.database
-          .prepare("SELECT COUNT(*) AS count FROM sync_accounts")
-          .get(),
-      ).toMatchObject({ count: 0 });
       expect(
         store.database
           .prepare("SELECT COUNT(*) AS count FROM sync_events")
@@ -626,21 +1019,116 @@ describe("CardScope API", () => {
     }
   });
 
-  it("should logically delete authenticated cloud sync data with an idempotent response", async () => {
+  it("should share an exact client/server identifier and added-holding contract", async () => {
     const { app, store } = testDependencies();
-    const operation = testOperation();
+    const whitespaceId = testOperation({ id: " operation-with-spaces " });
+    const oversizedId = testOperation({ id: "x".repeat(161) });
+    const deletedHolding = structuredClone(testOperation());
+    (
+      deletedHolding.payload as {
+        holding: Record<string, unknown>;
+      }
+    ).holding.deletedAt = "2026-07-22T12:00:00.000Z";
+    const invalid = [whitespaceId, oversizedId, deletedHolding];
 
     try {
-      await app.request("/api/sync", {
+      expect(invalid.map(isCollectionEvent)).toEqual([false, false, false]);
+      const generation = await bootstrapGeneration(app);
+      for (const operation of invalid) {
+        const response = await app.request("/api/sync", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ generation, operations: [operation] }),
+        });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({
+          error: { code: "invalid_request" },
+        });
+      }
+      expect(
+        store.database
+          .prepare("SELECT COUNT(*) AS count FROM sync_events")
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should reject an account event quota atomically", async () => {
+    const { app, store } = testDependencies({
+      configure(config) {
+        config.sync.maxAccountEvents = 1;
+      },
+    });
+    const first = testOperation({ id: "operation-1" });
+    const second = testOperation({
+      id: "operation-2",
+      holdingId: "holding-2",
+      payload: {
+        holding: {
+          ...(first.payload as { holding: Record<string, unknown> }).holding,
+          id: "holding-2",
+        },
+      },
+    });
+    const operations = [first, second];
+
+    try {
+      const generation = await bootstrapGeneration(app);
+      const response = await app.request("/api/sync", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ operations: [operation] }),
+        body: JSON.stringify({ generation, operations }),
       });
+
+      expect(response.status).toBe(507);
+      expect(await response.json()).toMatchObject({
+        error: { code: "sync_storage_limit", limit: "events" },
+      });
+      expect(
+        store.database
+          .prepare("SELECT COUNT(*) AS count FROM sync_accounts")
+          .get(),
+      ).toMatchObject({ count: 1 });
+      expect(
+        store.database
+          .prepare("SELECT COUNT(*) AS count FROM sync_events")
+          .get(),
+      ).toMatchObject({ count: 0 });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should advance generation on delete and reject stale devices", async () => {
+    const { app, store } = testDependencies();
+    const operation = testOperation();
+    const staleOperation = testOperation({ id: "operation-stale" });
+
+    try {
+      const generation = await bootstrapGeneration(app);
+      const createResponse = await app.request("/api/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ generation, operations: [operation] }),
+      });
+      expect((await createResponse.json()).generation).toBe("1");
 
       const firstResponse = await app.request("/api/sync", {
         method: "DELETE",
       });
       const first = await firstResponse.json();
+      const staleResponse = await app.request("/api/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          generation: "1",
+          operations: [staleOperation],
+        }),
+      });
+      const omittedResponse = await app.request("/api/sync");
+      const currentResponse = await app.request("/api/sync?generation=2");
       const secondResponse = await app.request("/api/sync", {
         method: "DELETE",
       });
@@ -650,21 +1138,73 @@ describe("CardScope API", () => {
       expect(first).toEqual({
         deleted: true,
         accountExisted: true,
+        generation: "2",
         message:
           "Cloud sync events were deleted from the active database. This does not guarantee erasure from filesystem snapshots or backups, which follow their own retention policies.",
       });
+      expect(staleResponse.status).toBe(409);
+      expect(await staleResponse.json()).toEqual({
+        error: {
+          code: "sync_generation_mismatch",
+          message: "Sync generation 2 is required for this account",
+          currentGeneration: "2",
+        },
+      });
+      expect(omittedResponse.status).toBe(200);
+      expect(await omittedResponse.json()).toMatchObject({
+        generation: "2",
+        events: [],
+      });
+      expect(currentResponse.status).toBe(200);
+      expect(await currentResponse.json()).toMatchObject({
+        generation: "2",
+        events: [],
+      });
       expect(secondResponse.status).toBe(200);
-      expect(second).toMatchObject({ deleted: true, accountExisted: false });
+      expect(second).toMatchObject({
+        deleted: true,
+        accountExisted: true,
+        generation: "3",
+      });
       expect(
         store.database
-          .prepare("SELECT COUNT(*) AS count FROM sync_accounts")
+          .prepare(
+            `SELECT COUNT(*) AS count, MAX(generation) AS generation
+             FROM sync_accounts`,
+          )
           .get(),
-      ).toMatchObject({ count: 0 });
+      ).toMatchObject({ count: 1, generation: 3 });
       expect(
         store.database
           .prepare("SELECT COUNT(*) AS count FROM sync_events")
           .get(),
       ).toMatchObject({ count: 0 });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should return generation two when deleting an account that was never synced", async () => {
+    const { app, store } = testDependencies();
+
+    try {
+      const response = await app.request("/api/sync", { method: "DELETE" });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        deleted: true,
+        accountExisted: false,
+        generation: "2",
+      });
+      expect(
+        store.database
+          .prepare(
+            `SELECT generation
+             FROM sync_accounts
+             WHERE user_id = ?`,
+          )
+          .get("user-123"),
+      ).toEqual({ generation: 2 });
     } finally {
       store.close();
     }
@@ -684,6 +1224,7 @@ describe("CardScope API", () => {
 
       expect(response.status).toBe(401);
       expect(response.headers.get("www-authenticate")).toBe("Bearer");
+      expect(response.headers.get("cache-control")).toBe("no-store");
       expect(body.error.code).toBe("unauthorized");
     } finally {
       store.close();
@@ -698,8 +1239,33 @@ describe("CardScope API", () => {
     try {
       const response = await app.request("/api/sync");
       expect(response.status).toBe(503);
+      expect(response.headers.get("cache-control")).toBe("no-store");
       expect(await response.json()).toMatchObject({
         error: { code: "sync_disabled" },
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should rate-limit authenticated sync per subject and prohibit response caching", async () => {
+    const { app, store } = testDependencies();
+
+    try {
+      for (let request = 0; request < 60; request += 1) {
+        const response = await app.request("/api/sync");
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+      }
+      const limited = await app.request("/api/sync");
+      expect(limited.status).toBe(429);
+      expect(limited.headers.get("cache-control")).toBe("no-store");
+      expect(limited.headers.get("retry-after")).toBe("60");
+      expect(await limited.json()).toEqual({
+        error: {
+          code: "sync_rate_limited",
+          message: "Cloud sync request rate exceeded",
+        },
       });
     } finally {
       store.close();

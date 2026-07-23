@@ -328,13 +328,10 @@ function scenarioProjection(
     monthlySessions * scenario.consultationsPerSession;
   const monthlyScans = activeAccounts * scenario.scansPerActiveAccount;
   const monthlyCatalogueRequests = monthlyScans * 2;
-  const paidActiveAccounts =
-    economics.paidAccounts * scenario.monthlyActiveRate;
-  const monthlySyncRequests =
-    paidActiveAccounts * scenario.sessionsPerActiveAccount;
+  const monthlySyncRequests = monthlySessions;
   // One bootstrap/config request and one compact price delta per session.
   const monthlyOptimizedRequests =
-    monthlyCatalogueRequests + monthlySessions * 2 + monthlySyncRequests;
+    monthlyScans + monthlySessions * 2 + monthlySyncRequests;
   const monthlyNaiveRequests = monthlyOptimizedRequests + monthlyConsultations;
   const averageOptimizedRps = monthlyOptimizedRequests / secondsPerMonth;
   const averageNaiveRps = monthlyNaiveRequests / secondsPerMonth;
@@ -369,7 +366,7 @@ function scenarioProjection(
     economics.infrastructureBudgetUsd - allocatedComputeCostUsd,
   );
   const storageGiBMonths =
-    paidStorage.totalWithBackupsGiB * inputs.years * MONTHS_PER_YEAR;
+    allAccountStorage.totalWithBackupsGiB * inputs.years * MONTHS_PER_YEAR;
 
   return {
     id: scenario.id,

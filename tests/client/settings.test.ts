@@ -17,7 +17,12 @@ const config: RuntimeConfig = {
     clientId: "cardscope",
     scope: "openid",
   },
-  sync: { enabled: true, retentionDays: 1826 },
+  sync: {
+    enabled: true,
+    retentionDays: 1826,
+    maxBatchSize: 100,
+    maxOperationBytes: 64 * 1024,
+  },
   valuation: { marketQuotesEnabled: true },
 };
 
@@ -32,7 +37,6 @@ function renderSettings(overrides: Record<string, unknown> = {}) {
     },
     syncState: "idle",
     valuationPreference: { market: "tcgplayer", currency: "USD" },
-    onLocale: vi.fn(),
     onValuationPreference: vi.fn(),
     onExportJson: vi.fn(),
     onExportCsv: vi.fn(),
@@ -51,13 +55,13 @@ afterEach(() => {
 });
 
 describe("settings interactions", () => {
-  it("should notify the app when the user selects French in the design-system tabs", async () => {
-    const onLocale = vi.fn();
-    renderSettings({ onLocale });
+  it("should leave interface language selection to the application menu", () => {
+    renderSettings();
 
-    await userEvent.click(screen.getByRole("tab", { name: "Français" }));
-
-    expect(onLocale).toHaveBeenCalledWith("fr");
+    expect(
+      screen.queryByRole("heading", { name: "Language" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
   });
 
   it("should expose market and currency preferences independently from interface language", async () => {
@@ -86,7 +90,7 @@ describe("settings interactions", () => {
   it("should require an explicit replace choice and confirmation before restoring a JSON backup", async () => {
     const onImport = vi.fn().mockResolvedValue(3);
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    renderSettings({ onImport });
+    renderSettings({ authState: { status: "anonymous" }, onImport });
 
     await userEvent.click(
       screen.getByRole("radio", { name: /Replace active collection/i }),
@@ -111,7 +115,7 @@ describe("settings interactions", () => {
 
   it("should merge JSON by default and always append CSV imports", async () => {
     const onImport = vi.fn().mockResolvedValue(1);
-    renderSettings({ onImport });
+    renderSettings({ authState: { status: "anonymous" }, onImport });
     const input = screen.getByLabelText(/Import JSON or CSV/i);
 
     const backup = new File(["[]"], "backup.json", {
@@ -136,13 +140,35 @@ describe("settings interactions", () => {
     renderSettings({ onDeleteCloud });
 
     await userEvent.click(
-      screen.getByRole("button", { name: /Delete active server copy/i }),
+      screen.getByRole("button", { name: /Delete account collection/i }),
     );
 
     expect(confirm).toHaveBeenCalledWith(
-      expect.stringContaining("local collection remains"),
+      expect.stringContaining("account and this device"),
     );
     expect(onDeleteCloud).toHaveBeenCalledOnce();
-    expect(await screen.findByText(/Local data was kept/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/deleted from your account and this device/i),
+    ).toBeInTheDocument();
+  });
+
+  it("should prevent destructive local replacement for a centrally synchronized account", () => {
+    renderSettings();
+
+    expect(
+      screen.getByRole("radio", { name: /Replace active collection/i }),
+    ).toBeDisabled();
+    expect(screen.getByText(/synchronized centrally/i)).toBeInTheDocument();
+  });
+
+  it("should present automatic-save status without a permanent manual sync control", () => {
+    renderSettings({ syncState: "synced" });
+
+    expect(
+      screen.getByText(/All changes are saved to your account/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Sync now|Retry saving/i }),
+    ).not.toBeInTheDocument();
   });
 });

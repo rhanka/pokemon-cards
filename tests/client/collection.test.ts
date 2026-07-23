@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { findDuplicate, replayCollection } from "../../src/lib/collection";
+import { describe, expect, it, vi } from "vitest";
+import {
+  findDuplicate,
+  nextCollectionEventTimestamp,
+  replayCollection,
+} from "../../src/lib/collection";
 import { holdingsFromCsv, holdingsToCsv } from "../../src/lib/import-export";
 import type { CollectionEvent, Holding } from "../../src/lib/types";
 
@@ -46,6 +50,65 @@ describe("event-sourced collection", () => {
     expect(snapshot.holdings[0].quantity).toBe(3);
     expect(snapshot.eventCount).toBe(2);
     expect(snapshot.activities[0].quantityDelta).toBe(2);
+  });
+
+  it("should prefer the central sequence over skewed device clocks", () => {
+    const snapshot = replayCollection([
+      event({
+        id: "adjustment",
+        type: "holding.quantity-adjusted",
+        holdingId: holding.id,
+        occurredAt: "2025-12-31T23:59:59.000Z",
+        serverSequence: 12,
+        payload: { delta: 1 },
+      }),
+      event({
+        id: "addition",
+        type: "holding.added",
+        holdingId: holding.id,
+        occurredAt: "2026-01-01T00:00:00.000Z",
+        serverSequence: 11,
+        payload: { holding },
+      }),
+    ]);
+
+    expect(snapshot.holdings[0].quantity).toBe(2);
+    expect(snapshot.activities[0].id).toBe("adjustment");
+  });
+
+  it("should replay a new local event after its sequenced central base", () => {
+    const snapshot = replayCollection([
+      event({
+        id: "local-adjustment",
+        type: "holding.quantity-adjusted",
+        holdingId: holding.id,
+        occurredAt: "2025-01-01T00:00:00.000Z",
+        payload: { delta: 1 },
+      }),
+      event({
+        id: "central-addition",
+        type: "holding.added",
+        holdingId: holding.id,
+        occurredAt: "2026-01-01T00:00:00.000Z",
+        serverSequence: 11,
+        payload: { holding },
+      }),
+    ]);
+
+    expect(snapshot.holdings[0].quantity).toBe(2);
+  });
+
+  it("should create local timestamps after the state observed with a slow clock", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      expect(nextCollectionEventTimestamp("2026-01-02T00:00:00.000Z")).toBe(
+        "2026-01-02T00:00:00.001Z",
+      );
+      expect(nextCollectionEventTimestamp()).toBe("2026-01-01T00:00:00.000Z");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("should retain condition, finish, cost, and quote changes as history", () => {

@@ -96,29 +96,6 @@ img {
   z-index: 30;
   top: 0;
 }
-.network-state {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  min-height: 2rem;
-  padding: 0 0.6rem;
-  color: var(--success);
-  border-radius: 2rem;
-  background: var(--success-soft);
-  font-size: 0.62rem;
-  font-weight: 800;
-}
-.network-state.offline {
-  color: var(--warning);
-  background: var(--warning-soft);
-}
-.online-dot {
-  width: 0.45rem;
-  aspect-ratio: 1;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 0 0.2rem rgba(25, 134, 91, 0.12);
-}
 .offline-banner {
   display: flex;
   align-items: center;
@@ -130,6 +107,49 @@ img {
   background: var(--warning-soft);
   font-size: 0.7rem;
   font-weight: 700;
+}
+.enrollment-progress,
+.enrollment-banner {
+  width: min(100% - 1.5rem, 72rem);
+  margin: 0.75rem auto 0;
+  border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--line));
+  border-radius: 1rem;
+  background: var(--surface);
+  box-shadow: 0 0.5rem 1.5rem rgba(23, 31, 56, 0.07);
+}
+.enrollment-progress {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.65rem 1rem;
+  color: var(--primary);
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+.enrollment-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+}
+.enrollment-banner strong {
+  font: 750 0.88rem/1.25 var(--font-display);
+}
+.enrollment-banner p {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+.enrollment-banner .enrollment-error {
+  color: var(--danger);
+}
+.enrollment-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.5rem;
 }
 .valuation-banner {
   display: flex;
@@ -143,6 +163,15 @@ img {
   font-size: 0.7rem;
   font-weight: 700;
   text-align: center;
+}
+@media (max-width: 42rem) {
+  .enrollment-banner {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .enrollment-actions {
+    display: grid;
+  }
 }
 main {
   min-height: calc(100dvh - 5rem);

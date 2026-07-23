@@ -8,7 +8,7 @@ RUN npm run build
 
 FROM node:22.22-alpine@sha256:e58326d0d441090181ac150dc2078d3e2cf6a0d42e809aebba3ef5880935ffdd AS runtime
 LABEL org.opencontainers.image.source="https://github.com/rhanka/pokemon-cards"
-LABEL org.opencontainers.image.description="CardScope local-first card scanner and collection API"
+LABEL org.opencontainers.image.description="CardScope image recognition and account-backed collection API"
 LABEL org.opencontainers.image.licenses="MIT"
 
 ENV NODE_ENV=production \
