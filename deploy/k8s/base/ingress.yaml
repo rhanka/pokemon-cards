@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pokemon-cards
+  labels:
+    app.kubernetes.io/name: pokemon-cards
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: pokemon-cards.sent-tech.ca
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pokemon-cards
+                port:
+                  name: http
+  tls:
+    - hosts:
+        - pokemon-cards.sent-tech.ca
+      secretName: pokemon-cards-tls

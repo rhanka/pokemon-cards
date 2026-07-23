@@ -1,0 +1,58 @@
+{
+  "name": "cardscope",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "prepare:ocr": "node scripts/prepare-ocr-assets.mjs",
+    "predev": "npm run prepare:ocr",
+    "dev": "concurrently -k -n api,web -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:client": "vite",
+    "dev:server": "tsx watch server/index.ts",
+    "prebuild": "npm run prepare:ocr",
+    "build": "vite build && tsc -p tsconfig.server.json",
+    "start": "node dist-server/server/index.js",
+    "check": "svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.server.json --noEmit && eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "validate": "npm run check && npm run test && npm run build",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.11",
+    "@sentropic/design-system-svelte": "^0.34.71",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@tesseract.js-data/fra": "^1.0.0",
+    "dexie": "^4.2.0",
+    "hono": "^4.9.0",
+    "jose": "^6.1.0",
+    "oidc-client-ts": "^3.3.0",
+    "svelte": "^5.56.7",
+    "tesseract.js": "^6.0.1",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^6.1.0",
+    "@testing-library/jest-dom": "^6.8.0",
+    "@testing-library/svelte": "^5.2.0",
+    "@testing-library/user-event": "^14.6.0",
+    "@types/node": "^22.18.0",
+    "concurrently": "^9.2.0",
+    "eslint": "^9.34.0",
+    "eslint-plugin-svelte": "^3.12.0",
+    "fake-indexeddb": "^6.2.5",
+    "jsdom": "^26.1.0",
+    "prettier": "^3.6.0",
+    "prettier-plugin-svelte": "^3.4.0",
+    "svelte-check": "^4.3.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.41.0",
+    "vite": "^7.1.0",
+    "vitest": "^3.2.0"
+  }
+}

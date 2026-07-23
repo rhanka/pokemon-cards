@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cardscope.invalid/schemas/rights-manifest.schema.json",
+  "title": "CardScope rights manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "dataset_id",
+    "created_at",
+    "description",
+    "intended_use",
+    "sources",
+    "items"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "dataset_id": { "$ref": "#/$defs/identifier" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "description": { "type": "string", "minLength": 1 },
+    "intended_use": { "type": "string", "minLength": 1 },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/source" }
+    },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/item" }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_id",
+        "provider",
+        "origin_url",
+        "acquired_at",
+        "rights_holder",
+        "rights_basis",
+        "license_id",
+        "license_url",
+        "terms_url",
+        "terms_verified_at",
+        "commercial_use_allowed",
+        "derivatives_allowed",
+        "ml_training_allowed",
+        "model_redistribution_allowed",
+        "asset_redistribution_allowed",
+        "attribution",
+        "notes"
+      ],
+      "properties": {
+        "source_id": { "$ref": "#/$defs/identifier" },
+        "provider": { "type": "string", "minLength": 1 },
+        "origin_url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://"
+        },
+        "acquired_at": { "type": "string", "format": "date-time" },
+        "rights_holder": { "type": "string", "minLength": 1 },
+        "rights_basis": {
+          "enum": ["owned", "licensed", "public-domain", "explicit-permission"]
+        },
+        "license_id": { "type": "string", "minLength": 1 },
+        "license_url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://"
+        },
+        "terms_url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://"
+        },
+        "terms_verified_at": { "type": "string", "format": "date-time" },
+        "commercial_use_allowed": { "type": "boolean" },
+        "derivatives_allowed": { "type": "boolean" },
+        "ml_training_allowed": { "type": "boolean" },
+        "model_redistribution_allowed": { "type": "boolean" },
+        "asset_redistribution_allowed": { "type": "boolean" },
+        "attribution": { "type": "string", "minLength": 1 },
+        "notes": { "type": "string", "minLength": 1 }
+      }
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "item_id",
+        "card_uid",
+        "relative_path",
+        "sha256",
+        "source_id",
+        "role",
+        "capture_group",
+        "language",
+        "set_id",
+        "variant"
+      ],
+      "properties": {
+        "item_id": { "$ref": "#/$defs/identifier" },
+        "card_uid": { "$ref": "#/$defs/identifier" },
+        "relative_path": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+\\.(?:jpg|jpeg|png|webp)$"
+        },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "source_id": { "$ref": "#/$defs/identifier" },
+        "role": { "enum": ["reference", "capture", "unknown"] },
+        "capture_group": { "$ref": "#/$defs/identifier" },
+        "language": { "$ref": "#/$defs/identifier" },
+        "set_id": { "$ref": "#/$defs/identifier" },
+        "variant": { "$ref": "#/$defs/identifier" }
+      }
+    }
+  }
+}

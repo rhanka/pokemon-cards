@@ -1,0 +1,2 @@
+# Core validation, splitting, metrics, calibration, and dry-run tests.
+pytest>=8.2,<9

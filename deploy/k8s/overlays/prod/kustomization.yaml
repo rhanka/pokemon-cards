@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: pokemon-cards
+resources:
+  - ../../base
+images:
+  - name: ghcr.io/rhanka/pokemon-cards
+    newName: ghcr.io/rhanka/pokemon-cards
+    newTag: not-published

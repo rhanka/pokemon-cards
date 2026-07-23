@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pokemon-cards-data
+  labels:
+    app.kubernetes.io/name: pokemon-cards
+spec:
+  storageClassName: sbs-default
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+# This base currently targets the authorised Scaleway POC contract. A future
+# OVH overlay must replace this value only after its storage mapping is live.

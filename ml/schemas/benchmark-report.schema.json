@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cardscope.invalid/schemas/benchmark-report.schema.json",
+  "title": "CardScope ML benchmark report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "mode",
+    "created_at",
+    "dataset_id",
+    "manifest_fingerprint",
+    "split_fingerprint",
+    "seed",
+    "model",
+    "metrics",
+    "calibration",
+    "artifacts",
+    "device_benchmarks",
+    "release_evidence",
+    "gates",
+    "eligible_for_release"
+  ],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "mode": { "enum": ["dry-run", "benchmark"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "dataset_id": { "type": "string", "minLength": 1 },
+    "manifest_fingerprint": { "$ref": "#/$defs/digest" },
+    "split_fingerprint": { "$ref": "#/$defs/digest" },
+    "seed": { "type": "integer", "minimum": 0 },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "architecture",
+        "embedding_dimension",
+        "input_size",
+        "checkpoint_sha256"
+      ],
+      "properties": {
+        "architecture": { "type": "string", "minLength": 1 },
+        "embedding_dimension": { "const": 128 },
+        "input_size": { "const": 224 },
+        "checkpoint_sha256": {
+          "anyOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }]
+        }
+      }
+    },
+    "metrics": { "$ref": "#/$defs/metrics" },
+    "calibration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accept_threshold",
+        "target_far",
+        "validation_unknown_queries",
+        "method"
+      ],
+      "properties": {
+        "accept_threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+        "target_far": { "type": "number", "minimum": 0, "maximum": 1 },
+        "validation_unknown_queries": { "type": "integer", "minimum": 0 },
+        "method": { "const": "platt-top-score-margin-v1" }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "float_onnx_bytes",
+        "int8_onnx_bytes",
+        "reference_index_bytes"
+      ],
+      "properties": {
+        "float_onnx_bytes": { "type": "integer", "minimum": 0 },
+        "int8_onnx_bytes": { "type": "integer", "minimum": 0 },
+        "reference_index_bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "device_benchmarks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "device",
+          "runtime",
+          "target_phone",
+          "samples",
+          "p50_ms",
+          "p95_ms",
+          "cold_start_ms"
+        ],
+        "properties": {
+          "device": { "type": "string", "minLength": 1 },
+          "runtime": { "type": "string", "minLength": 1 },
+          "target_phone": { "type": "boolean" },
+          "samples": { "type": "integer", "minimum": 1 },
+          "p50_ms": { "type": "number", "minimum": 0 },
+          "p95_ms": { "type": "number", "minimum": 0 },
+          "cold_start_ms": { "type": "number", "minimum": 0 }
+        }
+      }
+    },
+    "release_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "high_value_recall_at_5",
+        "correction_rate",
+        "rights_approved_for_model",
+        "environment_lock_sha256"
+      ],
+      "properties": {
+        "high_value_recall_at_5": {
+          "anyOf": [{ "$ref": "#/$defs/rate" }, { "type": "null" }]
+        },
+        "correction_rate": {
+          "anyOf": [{ "$ref": "#/$defs/rate" }, { "type": "null" }]
+        },
+        "rights_approved_for_model": { "type": "boolean" },
+        "environment_lock_sha256": {
+          "anyOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }]
+        }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" }
+    },
+    "eligible_for_release": { "type": "boolean" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "top1",
+        "recall_at_5",
+        "false_accept_rate",
+        "expected_calibration_error",
+        "known_queries",
+        "unknown_queries",
+        "accepted_queries",
+        "false_accepts",
+        "accepted_wrong_known"
+      ],
+      "properties": {
+        "top1": { "$ref": "#/$defs/rate" },
+        "recall_at_5": { "$ref": "#/$defs/rate" },
+        "false_accept_rate": { "$ref": "#/$defs/rate" },
+        "expected_calibration_error": { "$ref": "#/$defs/rate" },
+        "known_queries": { "type": "integer", "minimum": 0 },
+        "unknown_queries": { "type": "integer", "minimum": 0 },
+        "accepted_queries": { "type": "integer", "minimum": 0 },
+        "false_accepts": { "type": "integer", "minimum": 0 },
+        "accepted_wrong_known": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "rate": { "type": "number", "minimum": 0, "maximum": 1 }
+  }
+}

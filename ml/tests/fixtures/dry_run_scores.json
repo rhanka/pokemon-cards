@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "gallery_uids": ["fixture:a", "fixture:b", "fixture:c", "fixture:d"],
+  "calibration": [
+    { "query_uid": "fixture:a", "scores": [0.96, 0.18, 0.12, 0.1] },
+    { "query_uid": "fixture:b", "scores": [0.21, 0.91, 0.24, 0.16] },
+    { "query_uid": "fixture:c", "scores": [0.15, 0.22, 0.89, 0.2] },
+    { "query_uid": "fixture:d", "scores": [0.18, 0.51, 0.2, 0.49] },
+    {
+      "query_uid": "fixture:unknown-cal-1",
+      "scores": [0.63, 0.58, 0.55, 0.53]
+    },
+    { "query_uid": "fixture:unknown-cal-2", "scores": [0.57, 0.51, 0.49, 0.48] }
+  ],
+  "evaluation": [
+    { "query_uid": "fixture:a", "scores": [0.94, 0.2, 0.11, 0.09] },
+    { "query_uid": "fixture:b", "scores": [0.18, 0.88, 0.35, 0.22] },
+    { "query_uid": "fixture:c", "scores": [0.17, 0.56, 0.54, 0.15] },
+    { "query_uid": "fixture:d", "scores": [0.2, 0.31, 0.25, 0.86] },
+    {
+      "query_uid": "fixture:unknown-eval-1",
+      "scores": [0.55, 0.52, 0.49, 0.48]
+    },
+    {
+      "query_uid": "fixture:unknown-eval-2",
+      "scores": [0.59, 0.57, 0.55, 0.51]
+    }
+  ]
+}
