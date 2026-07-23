@@ -11,23 +11,30 @@ Production uses one replica and `Recreate` because the first tier uses SQLite on
 
 The `not-published` image tag in Git is a fail-closed render placeholder and is never pushed. Deployment automation accepts only a 40-character commit that is an ancestor of `origin/main`, resolves its `sha-<commit>` package, verifies the OCI revision label and GitHub build-provenance attestation, then replaces the placeholder with the registry digest. Before applying, it validates the namespace-scoped context, confirms the credential cannot create cluster-scoped RBAC, checks a fresh owner capacity approval and quota headroom, and performs a server-side dry-run.
 
-The protected GitHub `production` environment owns both `KUBE_CONFIG_DATA` and `CAPACITY_APPROVED_UNTIL`. An infrastructure owner sets the latter to an RFC 3339 timestamp only after checking live eligible-node capacity; the workflow accepts it only while it is in the future and no more than 24 hours away. The namespace quota must also retain at least the workload's 50m CPU and 128Mi memory requests. Namespace-scoped CI intentionally cannot infer physical-node headroom itself.
+The protected GitHub `production` environment owns both `KUBE_CONFIG_DATA` and `CAPACITY_APPROVED_UNTIL` if CI deployment is later enabled. The current POC uses an owner-operated apply path instead. Immediately before either path, the operator must confirm at least the workload's explicit 20m CPU and 256Mi memory requests; the CPU request is intentionally small while the 300m limit permits short OCR bursts.
 
 Do not deploy until all owner-controlled gates are green:
 
 - the `pokemon-cards` namespace contract is applied;
-- at least 50m CPU request capacity is available on an eligible node;
+- at least 20m CPU and 256Mi requested memory are available on an eligible node;
 - the GHCR package is public or an approved pull secret exists;
-- `KUBE_CONFIG_DATA` contains the namespace-scoped kubeconfig;
-- `CAPACITY_APPROVED_UNTIL` records a fresh infrastructure-owner capacity check;
-- the checked-in `TCGDEX_CATALOG_ENABLED`, `POKEMON_TCG_CATALOG_ENABLED`, `CARD_IMAGES_ENABLED`, and `MARKET_QUOTES_ENABLED` values remain `false` until each corresponding rights record is approved;
+- the owner-operated path uses the verified live context, or, if CI deployment
+  is later enabled, `KUBE_CONFIG_DATA` contains the namespace-scoped kubeconfig
+  and `CAPACITY_APPROVED_UNTIL` records a fresh owner capacity check;
+- `TCGDEX_CATALOG_ENABLED=true` is limited to the reviewed MIT catalogue metadata revision and its attribution;
+- `POKEMON_TCG_CATALOG_ENABLED`, `CARD_IMAGES_ENABLED`, and `MARKET_QUOTES_ENABLED` remain `false` until each separate rights record is approved;
 - the Sentropic public OIDC client is registered;
 - its API audience is confirmed and represented in `OIDC_AUDIENCE`;
 - a time-bound Cloud Pass entitlement is verified server-side; a valid OIDC identity alone must never allocate paid storage;
 - DNS points `pokemon-cards.sent-tech.ca` to the shared Traefik load balancer;
 - an encrypted off-PVC backup target, deletion/expiry policy, and isolated restore rehearsal satisfy `docs/backup-restore.md`.
 
-All catalogue/image/quote switches and `OIDC_REQUIRED` are intentionally `false` in the checked-in ConfigMap. Do not enable paid data or cloud sync merely to test the deployment: local-only mode is the safe launch state until the corresponding rights and cloud-history gates are green.
+The checked-in POC enables server recognition and TCGdex catalogue metadata only. Card images, marketplace quotes, the secondary catalogue, and `OIDC_REQUIRED` stay disabled. Do not enable paid data or cloud sync merely to test the deployment.
+
+The current tenant quota allows exactly 256 MiB of aggregate requested memory.
+That is compatible with one `Recreate` app pod, but not with a concurrent
+backup Job or second pod. Such a workload requires a separately reviewed quota
+and live-capacity change; it is not silently squeezed into the POC.
 
 Rollback the workload without deleting user data:
 

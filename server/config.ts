@@ -21,6 +21,7 @@ export interface RuntimeConfig {
     cacheFreshMs: number;
     cacheMaxStaleMs: number;
     cacheMaxEntries: number;
+    cacheMaxBytes: number;
     rateLimitPerMinute: number;
     globalRateLimitPerMinute: number;
     maxConcurrentRequests: number;
@@ -28,6 +29,18 @@ export interface RuntimeConfig {
     providerCooldownMs: number;
     marketQuotesEnabled: boolean;
     languages: CardLanguage[];
+  };
+  recognition: {
+    enabled: boolean;
+    dataPath: string;
+    maxImageBytes: number;
+    maxPixels: number;
+    normalizedMaxEdge: number;
+    timeoutMs: number;
+    idleTimeoutMs: number;
+    rateLimitPerMinute: number;
+    globalRateLimitPerMinute: number;
+    maxConcurrentUploads: number;
   };
   oidc: {
     enabled: boolean;
@@ -52,6 +65,15 @@ export interface RuntimeConfig {
 const DEFAULT_PORT = 8787;
 const DEFAULT_RETENTION_DAYS = 1_826;
 const MAX_CATALOG_RESPONSE_BYTES = 16 * 1024 * 1024;
+const MAX_CATALOG_CACHE_BYTES = 1024 * 1024 * 1024;
+const MAX_RECOGNITION_IMAGE_BYTES = 4 * 1024 * 1024;
+const MAX_RECOGNITION_PIXELS = 4_000_000;
+const MAX_RECOGNITION_EDGE = 1_600;
+const MAX_RECOGNITION_TIMEOUT_MS = 45_000;
+const MAX_RECOGNITION_IDLE_TIMEOUT_MS = 15 * 60 * 1_000;
+const MAX_RECOGNITION_RATE_PER_MINUTE = 60;
+const MAX_RECOGNITION_GLOBAL_RATE_PER_MINUTE = 120;
+const MAX_RECOGNITION_CONCURRENT_UPLOADS = 4;
 
 export function loadLocalEnvironment(file = ".env"): boolean {
   try {
@@ -76,6 +98,20 @@ function parseInteger(
     throw new Error(
       `${name} must be an integer greater than or equal to ${minimum}`,
     );
+  }
+  return parsed;
+}
+
+function parseBoundedInteger(
+  value: string | undefined,
+  fallback: number,
+  name: string,
+  minimum: number,
+  maximum: number,
+): number {
+  const parsed = parseInteger(value, fallback, name, minimum);
+  if (parsed > maximum) {
+    throw new Error(`${name} must not exceed ${maximum}`);
   }
   return parsed;
 }
@@ -187,6 +223,24 @@ export function loadConfig(
       `CATALOG_MAX_RESPONSE_BYTES must not exceed ${MAX_CATALOG_RESPONSE_BYTES}`,
     );
   }
+  const catalogCacheMaxBytes = parseBoundedInteger(
+    env.CATALOG_CACHE_MAX_BYTES,
+    256 * 1024 * 1024,
+    "CATALOG_CACHE_MAX_BYTES",
+    1024 * 1024,
+    MAX_CATALOG_CACHE_BYTES,
+  );
+  const recognitionMaxImageBytes = parseInteger(
+    env.RECOGNITION_MAX_IMAGE_BYTES,
+    2 * 1024 * 1024,
+    "RECOGNITION_MAX_IMAGE_BYTES",
+    64 * 1024,
+  );
+  if (recognitionMaxImageBytes > MAX_RECOGNITION_IMAGE_BYTES) {
+    throw new Error(
+      `RECOGNITION_MAX_IMAGE_BYTES must not exceed ${MAX_RECOGNITION_IMAGE_BYTES}`,
+    );
+  }
 
   return {
     host: env.HOST?.trim() || "0.0.0.0",
@@ -247,6 +301,7 @@ export function loadConfig(
         "CATALOG_CACHE_MAX_ENTRIES",
         100,
       ),
+      cacheMaxBytes: catalogCacheMaxBytes,
       rateLimitPerMinute: parseInteger(
         env.CATALOG_RATE_LIMIT_PER_MINUTE,
         60,
@@ -283,6 +338,66 @@ export function loadConfig(
         "MARKET_QUOTES_ENABLED",
       ),
       languages: ["en", "fr"],
+    },
+    recognition: {
+      enabled: parseBoolean(
+        env.RECOGNITION_ENABLED,
+        false,
+        "RECOGNITION_ENABLED",
+      ),
+      dataPath: path.resolve(
+        env.RECOGNITION_DATA_PATH?.trim() || "./recognition-data",
+      ),
+      maxImageBytes: recognitionMaxImageBytes,
+      maxPixels: parseBoundedInteger(
+        env.RECOGNITION_MAX_PIXELS,
+        4_000_000,
+        "RECOGNITION_MAX_PIXELS",
+        100_000,
+        MAX_RECOGNITION_PIXELS,
+      ),
+      normalizedMaxEdge: parseBoundedInteger(
+        env.RECOGNITION_NORMALIZED_MAX_EDGE,
+        1_600,
+        "RECOGNITION_NORMALIZED_MAX_EDGE",
+        320,
+        MAX_RECOGNITION_EDGE,
+      ),
+      timeoutMs: parseBoundedInteger(
+        env.RECOGNITION_TIMEOUT_MS,
+        30_000,
+        "RECOGNITION_TIMEOUT_MS",
+        5_000,
+        MAX_RECOGNITION_TIMEOUT_MS,
+      ),
+      idleTimeoutMs: parseBoundedInteger(
+        env.RECOGNITION_IDLE_TIMEOUT_MS,
+        5 * 60 * 1_000,
+        "RECOGNITION_IDLE_TIMEOUT_MS",
+        10_000,
+        MAX_RECOGNITION_IDLE_TIMEOUT_MS,
+      ),
+      rateLimitPerMinute: parseBoundedInteger(
+        env.RECOGNITION_RATE_LIMIT_PER_MINUTE,
+        10,
+        "RECOGNITION_RATE_LIMIT_PER_MINUTE",
+        1,
+        MAX_RECOGNITION_RATE_PER_MINUTE,
+      ),
+      globalRateLimitPerMinute: parseBoundedInteger(
+        env.RECOGNITION_GLOBAL_RATE_LIMIT_PER_MINUTE,
+        30,
+        "RECOGNITION_GLOBAL_RATE_LIMIT_PER_MINUTE",
+        1,
+        MAX_RECOGNITION_GLOBAL_RATE_PER_MINUTE,
+      ),
+      maxConcurrentUploads: parseBoundedInteger(
+        env.RECOGNITION_MAX_CONCURRENT_UPLOADS,
+        4,
+        "RECOGNITION_MAX_CONCURRENT_UPLOADS",
+        1,
+        MAX_RECOGNITION_CONCURRENT_UPLOADS,
+      ),
     },
     oidc: {
       enabled: oidcEnabled,
@@ -332,6 +447,14 @@ export function loadConfig(
 
 export function toPublicConfig(config: RuntimeConfig): PublicAppConfig {
   return {
+    recognition: {
+      enabled:
+        config.recognition.enabled &&
+        (config.catalogue.tcgdexCatalogEnabled ||
+          config.catalogue.pokemonTcgCatalogEnabled),
+      processing: "server",
+      maxImageBytes: config.recognition.maxImageBytes,
+    },
     auth: {
       enabled: config.oidc.enabled,
       issuer: config.oidc.issuer,
@@ -348,8 +471,12 @@ export function toPublicConfig(config: RuntimeConfig): PublicAppConfig {
       primary: "tcgdex",
       secondary: "pokemon_tcg",
     },
+    valuation: {
+      marketQuotesEnabled: config.catalogue.marketQuotesEnabled,
+    },
     privacy: {
-      photosUploadedByDefault: false,
+      photosUploadedForRecognition: true,
+      photosRetained: false,
     },
   };
 }

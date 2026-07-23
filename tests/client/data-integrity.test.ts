@@ -5,7 +5,12 @@ import { CollectionRepository, isCollectionEvent } from "../../src/lib/db";
 import { eventsFromJson, eventsToJson } from "../../src/lib/import-export";
 import { formatMoney } from "../../src/lib/i18n";
 import { collectionTotals } from "../../src/lib/value";
-import type { CollectionEvent, Holding } from "../../src/lib/types";
+import type {
+  CatalogCard,
+  CollectionEvent,
+  Holding,
+  PriceQuote,
+} from "../../src/lib/types";
 
 const opened: CollectionRepository[] = [];
 
@@ -53,11 +58,146 @@ function currentSnapshot(repo: CollectionRepository) {
   return current;
 }
 
+function quote(overrides: Partial<PriceQuote> = {}): PriceQuote {
+  return {
+    source: "licensed-feed",
+    market: "tcgplayer",
+    currency: "USD",
+    low: 1,
+    marketPrice: 2,
+    high: 3,
+    observedAt: "2026-07-22T00:00:00.000Z",
+    staleAfter: "2026-07-23T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function svelteLikeProxy<T>(value: T): T {
+  const proxies = new WeakMap<object, object>();
+  const proxify = (item: unknown): unknown => {
+    if (!item || typeof item !== "object") return item;
+    const prototype = Object.getPrototypeOf(item);
+    if (prototype !== Object.prototype && prototype !== Array.prototype)
+      return item;
+    const existing = proxies.get(item);
+    if (existing) return existing;
+    const proxied = new Proxy(item, {
+      get(target, key, receiver) {
+        return proxify(Reflect.get(target, key, receiver));
+      },
+    });
+    proxies.set(item, proxied);
+    return proxied;
+  };
+  return proxify(value) as T;
+}
+
 afterEach(() => {
   for (const instance of opened.splice(0)) instance.close();
 });
 
 describe("collection event runtime integrity", () => {
+  it("should persist a Svelte-proxied valued card without leaking transient fields", async () => {
+    const repo = repository();
+    await repo.init();
+    const selectedQuote = {
+      ...quote(),
+      transientRank: 0.99,
+    };
+    const recognized = svelteLikeProxy({
+      id: "pokemon-card:en:base1:58:pikachu",
+      name: "Pikachu",
+      number: "58",
+      setName: "Base Set",
+      language: "en",
+      quote: selectedQuote,
+      quotes: [selectedQuote],
+      score: 1,
+      scoreParts: { number: 1, name: 1, visual: null, catalogue: 1 },
+      matchReasons: ["number", "name"],
+    }) as unknown as CatalogCard & {
+      score: number;
+      scoreParts: Record<string, number | null>;
+      matchReasons: string[];
+    };
+
+    await repo.add({
+      card: { ...recognized, quote: recognized.quote },
+      finish: "normal",
+      condition: "near-mint",
+      quote: recognized.quotes?.[0],
+    });
+
+    const persisted = currentSnapshot(repo).holdings[0];
+    const card = persisted.card;
+    expect(card).toMatchObject({ name: "Pikachu", number: "58" });
+    expect(card).not.toHaveProperty("score");
+    expect(card).not.toHaveProperty("scoreParts");
+    expect(card).not.toHaveProperty("matchReasons");
+    expect(card.quote).not.toHaveProperty("transientRank");
+    expect(card.quotes?.[0]).not.toHaveProperty("transientRank");
+    expect(persisted.quote).not.toHaveProperty("transientRank");
+  });
+
+  it("should persist a Svelte-proxied quote update without leaking transient fields", async () => {
+    const repo = repository();
+    await repo.init();
+    await repo.add({
+      card: { id: "card-quote-update", name: "Pikachu" },
+      finish: "normal",
+      condition: "near-mint",
+    });
+    const holdingId = currentSnapshot(repo).holdings[0].id;
+    const proxied = svelteLikeProxy({ ...quote(), transientRank: 0.99 });
+
+    await repo.update(holdingId, {
+      quote: proxied as unknown as PriceQuote,
+    });
+
+    const persisted = currentSnapshot(repo).holdings[0].quote;
+    expect(persisted).toMatchObject({ source: "licensed-feed", low: 1 });
+    expect(persisted).not.toHaveProperty("transientRank");
+  });
+
+  it("should reject non-finite numbers in proxied card quotes", async () => {
+    const repo = repository();
+    await repo.init();
+    const card = svelteLikeProxy({
+      id: "card-invalid-quote",
+      name: "Pikachu",
+      quotes: [quote({ marketPrice: Number.POSITIVE_INFINITY })],
+    });
+
+    await expect(
+      repo.add({
+        card,
+        finish: "normal",
+        condition: "near-mint",
+      }),
+    ).rejects.toThrow();
+    expect(await repo.allEvents()).toEqual([]);
+  });
+
+  it("should reject non-finite numbers in a proxied quote update", async () => {
+    const repo = repository();
+    await repo.init();
+    await repo.add({
+      card: { id: "card-invalid-update", name: "Pikachu" },
+      finish: "normal",
+      condition: "near-mint",
+    });
+    const holdingId = currentSnapshot(repo).holdings[0].id;
+
+    await expect(
+      repo.update(holdingId, {
+        quote: svelteLikeProxy(
+          quote({ low: Number.NaN }),
+        ) as unknown as PriceQuote,
+      }),
+    ).rejects.toThrow();
+    expect(await repo.allEvents()).toHaveLength(1);
+  });
+
   it("should preserve real acquisition cost by keeping differently priced copies separate", async () => {
     const repo = repository();
     await repo.init();

@@ -25,17 +25,17 @@ Les offres vérifiées le 2026-07-22 vont du scanner gratuit au portefeuille pay
 
 Rapide à intégrer, mais crée un coût et une dépendance par scan. Le tarif Google Vision cité pendant l'étude n'est pas un bon proxy du coût d'un modèle spécialisé et n'est pas retenu comme argument de décision.
 
-### B. OCR + empreintes perceptuelles locales
+### B. OCR spécialisé sans fournisseur facturé au scan
 
-Après cadrage/redressement, OCR du numéro/nom pour réduire les candidats, puis fusion pHash/dHash/hash RGB/ORB. Le coût marginal est nul et l'ajout d'une carte ne demande pas de réentraînement. Cette voie est le socle de repli explicable.
+Après cadrage/réencodage client, un worker Tesseract.js unique dans le service Node lit le numéro/nom puis interroge le catalogue. Le coût marginal fournisseur est nul et l'ajout d'une carte ne demande pas de réentraînement. Borne de planification dans l'image Alpine finale : 3,3 CPU-s/scan, à partir de 3,22 CPU-s et 10,26 s à froid puis 1,66 CPU-s et 5,23 s à chaud sous 300m. Le cgroup final a culminé à 134 MiB avant de revenir à environ 86 MiB ; un essai antérieur sans limite avait culminé autour de 183 MiB RSS.
 
 ### C. Petit modèle de retrieval spécialisé
 
-MobileNetV3-Small ou EfficientNet-Lite produit un embedding 128D comparé à environ 21 000 références. Un modèle INT8 vise 3–8 Mo et l'index environ 2,7 Mo. Les augmentations synthétiques simulent perspective, reflets, sleeves, flou, ombres, compression et occlusions. Il n'y a aucun coût d'inférence serveur lorsque le modèle tourne via WebGPU/WASM.
+MobileNetV3-Small ou EfficientNet-Lite produit un embedding 128D comparé à environ 21 000 références. Un modèle INT8 vise 3–8 Mo et l'index environ 2,7 Mo. Les augmentations synthétiques simulent perspective, reflets, sleeves, flou, ombres, compression et occlusions. L'artefact sera exécuté dans le recognizer TypeScript, sans backend Python ni API Vision, uniquement après validation juridique et métrique.
 
 ### D. Hybride retenu
 
-Détection/cadrage, embedding local, OCR complémentaire, recherche dans le catalogue et abstention lorsque les scores sont proches. La finition et l'état restent une confirmation humaine. Une voie serveur n'est qu'un fallback explicite et sans conservation de photo.
+Cadrage/réencodage client, OCR serveur TypeScript, recherche catalogue et abstention lorsque les scores sont proches. La finition et l'état restent une confirmation humaine. Le futur embedding serveur accélère ou complète l'OCR ; la photo n'est jamais persistée ni utilisée pour l'entraînement.
 
 ## Modèles et jeux de données trouvés
 
@@ -58,7 +58,7 @@ Conclusion : entraîner un petit modèle maison sur des références et photogra
 
 Un paiement annuel de 1 USD est pénalisé par les frais fixes. Deux revues indépendantes convergent vers un forfait cinq ans :
 
-- 4,99 USD avec 30 % de conversion : 30 000 passes sur 100 000 comptes, 149 700 USD de chiffre d'affaires, coût complet plafond 99 900 USD, marge 49 800 USD ;
+- 4,99 USD avec 30 % de conversion : 30 000 passes sur 100 000 comptes, 149 700 USD de chiffre d'affaires, coût complet plafond 99 800 USD, marge 49 900 USD ;
 - 7,50 USD avec 20 % de conversion : 20 000 passes, 150 000 USD de chiffre d'affaires, coût complet 100 000 USD, marge 50 000 USD.
 
 Le prix bas maximise l'adoption et respecte la préférence du propriétaire. Le scénario 4,99 USD est retenu comme hypothèse de lancement, sous réserve de mesurer une conversion d'au moins 25–30 % et un coût complet maximal de 3,33 USD/pass sur cinq ans.
@@ -68,15 +68,15 @@ Le prix bas maximise l'adoption et respecte la préférence du propriétaire. Le
 1. Revue reconnaissance : a écarté toute fausse précision sur l'état/foil et exigé une confirmation humaine, un benchmark par UID et une abstention calibrée.
 2. Revue modèles/licences : a montré qu'aucun checkpoint publié n'est simultanément petit, performant, documenté et juridiquement propre ; elle recommande MobileNetV3 INT8 entraîné par le projet.
 3. Revue marché : a déplacé le ROI du « total du portfolio » vers la valeur nette vendable, les doublons et les cartes à vérifier en priorité.
-4. Revue économie : a établi qu'un cœur gratuit reste viable uniquement si son coût serveur est quasi nul et si le pass convertit suffisamment.
+4. Revue économie : a simulé explicitement 1 000 comptes ×1 000 cartes et montré 0,51m/6,37m/30,56m OCR moyens selon l'activité, avec import CSV/JSON pour l'onboarding massif.
 
-Les divergences OCR versus vision sont réconciliées ainsi : le modèle spécialisé est le chemin principal visé, OCR/hash sont des signaux complémentaires et un fallback immédiatement testable. Le chiffre d'une API Vision managée est retiré de la décision.
+Les divergences OCR versus vision sont réconciliées ainsi : l'OCR serveur mesuré est le chemin MVP immédiatement exploitable ; le modèle spécialisé ne le remplace qu'après droits et benchmark. Le chiffre d'une API Vision managée est retiré de la décision.
 
 ## Gates avant promesse commerciale
 
-- Top-1 exact >= 95 % au pilote, cible produit >= 98 % ; Recall@5 >= 99 % et >= 99,5 % au-dessus de 20 USD.
+- Recall@5 OCR/catalogue >=95 % sur un corpus pilote FR/EN autorisé ; le futur modèle garde les cibles Top-1 >=95 %, Recall@5 >=99 %.
 - Faux-accept < 0,5 %, corrections manuelles < 5 %, p95 du pipeline < 250 ms hors OCR froid.
-- Au moins 15 cartes/minute en mode continu ; 1 000 cartes en moins de 75 minutes avec vérifications.
+- Première réponse <30 s et p95 chaud <15 s dans l'image Kubernetes finale ; import CSV/JSON pour une collection existante de 1 000 cartes.
 - Benchmark séparé par UID, langue, set, époque, finition, téléphone et lumière, avec photos utilisateur jamais vues.
 - Conversion Pass >= 25 % à 1 000 comptes et coût complet observé compatible avec 4,99 USD / cinq ans.
 - Autorisation/licence explicite pour tout flux de prix, image de référence ou poids redistribué.

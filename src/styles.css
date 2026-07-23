@@ -131,6 +131,19 @@ img {
   font-size: 0.7rem;
   font-weight: 700;
 }
+.valuation-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 2rem;
+  padding: 0.35rem 0.8rem;
+  color: var(--warning);
+  background: var(--warning-soft);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-align: center;
+}
 main {
   min-height: calc(100dvh - 5rem);
 }
@@ -233,6 +246,15 @@ main {
      still renders the desktop nav. Keep the official drawer as the sole mobile nav. */
   .st-appChrome .st-appHeader__nav {
     display: none !important;
+  }
+  .st-appChrome .st-appChrome__burgerTrigger {
+    width: 44px;
+    height: 44px;
+  }
+  .st-appChrome .st-appChrome__brand,
+  .st-appChrome .st-appChrome__drawerLink,
+  .st-appChrome .st-appChrome__drawerBtn {
+    min-height: 44px;
   }
 }
 

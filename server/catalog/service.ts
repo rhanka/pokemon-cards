@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type {
   CardLanguage,
   CatalogueCardResult,
@@ -52,7 +54,10 @@ function searchKey(
   limit: number,
   policy: string,
 ): string {
-  return `catalogue:${policy}:search:${language}:${limit}:${query.trim().toLocaleLowerCase("en-US")}`;
+  const digest = createHash("sha256")
+    .update(query.trim().toLocaleLowerCase("en-US"))
+    .digest("hex");
+  return `catalogue:${policy}:search:${language}:${limit}:sha256:${digest}`;
 }
 
 function cardKey(cardId: string, policy: string): string {

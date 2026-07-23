@@ -19,7 +19,10 @@ import {
   type AuthPrincipal,
 } from "./auth.js";
 import { PokemonTcgAdapter, TcgdexAdapter } from "./catalog/adapters.js";
-import { CatalogueRequestGuard } from "./catalog/guard.js";
+import {
+  type CatalogueGuardLease,
+  CatalogueRequestGuard,
+} from "./catalog/guard.js";
 import {
   CatalogueCardNotFoundError,
   CatalogueService,
@@ -31,10 +34,19 @@ import {
   SyncOperationTooLargeError,
   SyncStorageLimitError,
 } from "./store.js";
+import {
+  RecognitionBusyError,
+  type RecognitionEngine,
+  RecognitionImageError,
+  RecognitionTimeoutError,
+  TesseractRecognitionEngine,
+} from "./recognition.js";
 
 interface AppEnvironment {
   Variables: {
     principal: AuthPrincipal;
+    recognitionLanguage: CardLanguage;
+    recognitionUploadLease: Extract<CatalogueGuardLease, { allowed: true }>;
   };
 }
 
@@ -43,11 +55,12 @@ export interface AppDependencies {
   store: SqliteStore;
   catalogue: CatalogueService;
   authenticator: Authenticator;
+  recognizer: RecognitionEngine;
 }
 
 export interface AppRuntime extends AppDependencies {
   app: Hono<AppEnvironment>;
-  close: () => void;
+  close: () => Promise<void>;
 }
 
 const isoDate = z.string().datetime({ offset: true });
@@ -156,14 +169,17 @@ function createAuthenticationMiddleware(
   };
 }
 
-function catalogueClientId(request: Request): string {
-  const realIp = request.headers.get("x-real-ip")?.trim();
-  if (realIp) return realIp;
+function requestClientId(request: Request): string {
+  // Traefik appends the immediate PROXY-protocol client to X-Forwarded-For.
+  // Prefer that final hop so a caller-supplied X-Real-IP cannot choose its
+  // rate-limit bucket.
   const forwarded = request.headers
     .get("x-forwarded-for")
-    ?.split(",")[0]
+    ?.split(",")
+    .at(-1)
     ?.trim();
-  return forwarded || "unknown";
+  if (forwarded) return forwarded;
+  return request.headers.get("x-real-ip")?.trim() || "unknown";
 }
 
 function syncStoreOptions(config: RuntimeConfig) {
@@ -242,12 +258,30 @@ function contentSecurityPolicy(config: RuntimeConfig): string {
 }
 
 export function createApp(dependencies: AppDependencies): Hono<AppEnvironment> {
-  const { config, store, catalogue, authenticator } = dependencies;
+  const { config, store, catalogue, authenticator, recognizer } = dependencies;
   const app = new Hono<AppEnvironment>();
   const catalogueGuard = new CatalogueRequestGuard({
     perClientPerMinute: config.catalogue.rateLimitPerMinute,
     globalPerMinute: config.catalogue.globalRateLimitPerMinute,
     maxConcurrent: config.catalogue.maxConcurrentRequests,
+  });
+  const recognitionUploadGuard = new CatalogueRequestGuard({
+    perClientPerMinute: config.recognition.rateLimitPerMinute,
+    globalPerMinute: config.recognition.globalRateLimitPerMinute,
+    maxConcurrent: config.recognition.maxConcurrentUploads,
+  });
+  const recognitionBodyLimit = bodyLimit({
+    maxSize: config.recognition.maxImageBytes,
+    onError: (context) =>
+      context.json(
+        {
+          error: {
+            code: "recognition_payload_too_large",
+            message: `Recognition images must not exceed ${config.recognition.maxImageBytes} bytes`,
+          },
+        },
+        413,
+      ),
   });
 
   app.use("*", async (context, next) => {
@@ -274,17 +308,20 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnvironment> {
   app.get("/api/health", (context) => {
     try {
       const databaseOk = store.ping();
+      const recognitionOk = recognizer.healthy?.() ?? true;
+      const healthy = databaseOk && recognitionOk;
       return context.json(
         {
-          status: databaseOk ? "ok" : "degraded",
+          status: healthy ? "ok" : "degraded",
           service: "cardscope-api",
           time: new Date().toISOString(),
           database: {
             ok: databaseOk,
             journalMode: store.journalMode(),
           },
+          recognition: { ok: recognitionOk },
         },
-        databaseOk ? 200 : 503,
+        healthy ? 200 : 503,
       );
     } catch {
       return context.json(
@@ -302,7 +339,7 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnvironment> {
   app.get("/api/config", (context) => context.json(toPublicConfig(config)));
 
   app.use("/api/catalog/*", async (context, next) => {
-    const lease = catalogueGuard.enter(catalogueClientId(context.req.raw));
+    const lease = catalogueGuard.enter(requestClientId(context.req.raw));
     if (!lease.allowed) {
       context.header("Retry-After", String(lease.retryAfterSeconds));
       return context.json(
@@ -321,6 +358,196 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnvironment> {
       lease.release();
     }
   });
+
+  app.post(
+    "/api/recognition/cards",
+    async (context, next) => {
+      context.header("Cache-Control", "no-store");
+      if (
+        !config.recognition.enabled ||
+        (!config.catalogue.tcgdexCatalogEnabled &&
+          !config.catalogue.pokemonTcgCatalogEnabled)
+      ) {
+        return context.json(
+          {
+            error: {
+              code: "recognition_disabled",
+              message:
+                "Recognition is disabled until an authorised catalogue is enabled",
+            },
+          },
+          503,
+        );
+      }
+
+      const parsed = z
+        .object({
+          language: z.enum(CARD_LANGUAGES),
+        })
+        .safeParse({
+          language: context.req.query("language") ?? context.req.query("lang"),
+        });
+      if (!parsed.success)
+        return context.json(invalidRequest(parsed.error.issues), 400);
+
+      const mediaType = context.req
+        .header("content-type")
+        ?.split(";", 1)[0]
+        ?.trim()
+        .toLowerCase();
+      if (mediaType !== "image/jpeg") {
+        return context.json(
+          {
+            error: {
+              code: "recognition_media_type",
+              message: "Recognition accepts image/jpeg only",
+            },
+          },
+          415,
+        );
+      }
+
+      const uploadLease = recognitionUploadGuard.enter(
+        requestClientId(context.req.raw),
+      );
+      if (!uploadLease.allowed) {
+        const busy = uploadLease.reason === "concurrency";
+        context.header(
+          "Retry-After",
+          busy ? "5" : String(uploadLease.retryAfterSeconds),
+        );
+        return context.json(
+          {
+            error: {
+              code: busy
+                ? "recognition_upload_busy"
+                : "recognition_rate_limited",
+              message: busy
+                ? "Too many recognition uploads are in progress"
+                : "Too many recognition requests; retry later",
+            },
+          },
+          429,
+        );
+      }
+
+      context.set("recognitionLanguage", parsed.data.language);
+      context.set("recognitionUploadLease", uploadLease);
+      try {
+        await next();
+      } finally {
+        uploadLease.release();
+      }
+    },
+    recognitionBodyLimit,
+    async (context) => {
+      let image: Uint8Array;
+      try {
+        image = new Uint8Array(await context.req.arrayBuffer());
+      } catch {
+        return context.json(
+          {
+            error: {
+              code: "recognition_invalid_image",
+              message: "The recognition image could not be read",
+            },
+          },
+          422,
+        );
+      }
+      if (!image.byteLength) {
+        return context.json(
+          {
+            error: {
+              code: "recognition_invalid_image",
+              message: "The recognition image is empty",
+            },
+          },
+          422,
+        );
+      }
+
+      context.get("recognitionUploadLease").release();
+
+      try {
+        const recognition = await recognizer.recognize(image);
+        const cards = recognition.evidence.query
+          ? (
+              await catalogue.search(
+                recognition.evidence.query,
+                context.get("recognitionLanguage"),
+                12,
+              )
+            ).cards
+          : [];
+        return context.json({ ...recognition, cards });
+      } catch (error) {
+        if (error instanceof RecognitionBusyError) {
+          context.get("recognitionUploadLease").refundClientQuota();
+          context.header("Retry-After", "10");
+          return context.json(
+            {
+              error: {
+                code: "recognition_busy",
+                message: "The recognition worker is busy; retry shortly",
+              },
+            },
+            429,
+          );
+        }
+        if (error instanceof RecognitionTimeoutError) {
+          return context.json(
+            {
+              error: {
+                code: "recognition_timeout",
+                message: error.message,
+              },
+            },
+            504,
+          );
+        }
+        if (error instanceof RecognitionImageError) {
+          return context.json(
+            {
+              error: {
+                code:
+                  error.reason === "unsupported"
+                    ? "recognition_media_type"
+                    : "recognition_invalid_image",
+                message: error.message,
+              },
+            },
+            error.reason === "unsupported" ? 415 : 422,
+          );
+        }
+        if (error instanceof CatalogueUnavailableError) {
+          return context.json(
+            {
+              error: {
+                code: "catalogue_unavailable",
+                message: error.message,
+              },
+            },
+            503,
+          );
+        }
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return context.json(
+            {
+              error: {
+                code: "recognition_cancelled",
+                message: "Recognition was cancelled",
+              },
+            },
+            408,
+          );
+        }
+        throw error;
+      } finally {
+        image.fill(0);
+      }
+    },
+  );
 
   app.get("/api/catalog/cards", async (context) => {
     const parsed = z
@@ -483,8 +710,7 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnvironment> {
         return next();
       context.header(
         "Cache-Control",
-        context.req.path.startsWith("/assets/") ||
-          context.req.path.startsWith("/ocr/v6/")
+        context.req.path.startsWith("/assets/")
           ? "public, max-age=31536000, immutable"
           : "public, max-age=0, must-revalidate",
       );
@@ -511,6 +737,7 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnvironment> {
 export function createRuntime(config = loadConfig()): AppRuntime {
   const store = new SqliteStore(config.databasePath, {
     catalogueCacheMaxEntries: config.catalogue.cacheMaxEntries,
+    catalogueCacheMaxBytes: config.catalogue.cacheMaxBytes,
   });
   store.pruneExpiredAccounts(new Date(), 100);
   store.pruneCatalogueCache(new Date(), 1_000);
@@ -540,7 +767,20 @@ export function createRuntime(config = loadConfig()): AppRuntime {
     marketQuotesEnabled: config.catalogue.marketQuotesEnabled,
   });
   const authenticator = createAuthenticator(config);
-  const dependencies = { config, store, catalogue, authenticator };
+  const recognizer = new TesseractRecognitionEngine({
+    dataPath: config.recognition.dataPath,
+    maxPixels: config.recognition.maxPixels,
+    normalizedMaxEdge: config.recognition.normalizedMaxEdge,
+    timeoutMs: config.recognition.timeoutMs,
+    idleTimeoutMs: config.recognition.idleTimeoutMs,
+  });
+  const dependencies = {
+    config,
+    store,
+    catalogue,
+    authenticator,
+    recognizer,
+  };
   const maintenanceTimer = setInterval(() => {
     try {
       const now = new Date();
@@ -555,10 +795,11 @@ export function createRuntime(config = loadConfig()): AppRuntime {
   return {
     ...dependencies,
     app: createApp(dependencies),
-    close: () => {
+    close: async () => {
       if (closed) return;
       closed = true;
       clearInterval(maintenanceTimer);
+      await recognizer.close();
       store.close();
     },
   };

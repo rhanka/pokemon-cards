@@ -1,22 +1,17 @@
 <script lang="ts">
-  /* global HTMLVideoElement, MediaStream, Blob, HTMLElement, navigator, document, Event, HTMLInputElement, URL, console, SubmitEvent, setTimeout, clearTimeout, AbortController */
+  /* global HTMLVideoElement, MediaStream, Blob, HTMLElement, navigator, document, Event, HTMLInputElement, URL, console, SubmitEvent, AbortController, AbortSignal, DOMException */
   import { Button, Card, Input } from "@sentropic/design-system-svelte";
   import { onDestroy, tick } from "svelte";
-  import { getCatalogCard, searchCatalog } from "../api";
+  import { getCatalogCard, recognizeCardImage, searchCatalog } from "../api";
   import type { AddHoldingInput } from "../collection";
-  import {
-    fingerprintImage,
-    prepareImageForRecognition,
-    rerankWithReferenceImages,
-  } from "../image-fingerprint";
+  import { prepareImageForRecognition } from "../image-upload";
   import { formatOptionalMoney, translate, type TranslationKey } from "../i18n";
-  import { parseCardText, recognizeCardText } from "../ocr";
+  import { parseCardText } from "../../../shared/card-text";
   import { decideRecognition, scoreCandidates } from "../scoring";
   import type {
     CardCondition,
     CardFinish,
     CatalogLanguage,
-    ImageFingerprint,
     Locale,
     ParsedCardText,
     RecognitionCandidate,
@@ -25,7 +20,6 @@
     ValuationPreference,
     VisualMatch,
   } from "../types";
-  import { runOptionalLocalModel } from "../vision";
   import { selectPriceQuote } from "../value";
   import Icon from "./Icon.svelte";
   import PriceQuote from "./PriceQuote.svelte";
@@ -75,7 +69,6 @@
   let recognitionController: AbortController | null = null;
   let recognitionAttempt = 0;
 
-  const OCR_TIMEOUT_MS = 45_000;
   const finishes: CardFinish[] = [
     "normal",
     "reverse",
@@ -120,38 +113,35 @@
     ),
   );
 
-  async function optionalWithTimeout<T>(
-    work: Promise<T>,
-    fallback: T,
-    timeoutMs = 5_000,
-  ): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        work,
-        new Promise<T>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error("Optional visual matching timed out")),
-            timeoutMs,
-          );
-        }),
-      ]);
-    } catch (error) {
-      console.info(
-        "Optional visual matching unavailable; text matching remains active.",
-        error,
-      );
-      return fallback;
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  }
-
   function selectedCardLanguage(): CatalogLanguage | null {
     if (cardLanguage) return cardLanguage;
     errorMessage = translate(locale, "scanner.languageRequired");
     stage = "error";
     return null;
+  }
+
+  function scanFailureMessage(error: unknown): string {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String(error.code)
+        : "";
+    if (
+      code === "recognition_busy" ||
+      code === "recognition_upload_busy" ||
+      code === "recognition_rate_limited"
+    ) {
+      return translate(locale, "scanner.busy");
+    }
+    if (
+      code === "recognition_timeout" ||
+      (error instanceof DOMException && error.name === "TimeoutError")
+    ) {
+      return translate(locale, "scanner.timeout");
+    }
+    if (code === "catalogue_unavailable") {
+      return translate(locale, "scanner.catalogueUnavailable");
+    }
+    return translate(locale, "scanner.error");
   }
 
   function stopCamera(): void {
@@ -248,27 +238,37 @@
     try {
       const prepared = await prepareImageForRecognition(blob);
       if (attempt !== recognitionAttempt || controller.signal.aborted) return;
+      if (prepared.size > config.recognition.maxImageBytes) {
+        throw new Error("Prepared recognition image exceeds the upload limit");
+      }
       replacePreview(prepared);
-      const [textResult, fingerprint] = await Promise.all([
-        recognizeCardText(
-          prepared,
-          cardLanguage === "fr" ? "fra+eng" : "eng+fra",
-          ({ progress: value }) => {
-            if (attempt !== recognitionAttempt || controller.signal.aborted)
-              return;
-            progress = Math.round(value * 100);
-          },
-          { signal: controller.signal, timeoutMs: OCR_TIMEOUT_MS },
-        ),
-        fingerprintImage(prepared),
-      ]);
+      if (!config.recognition.enabled) {
+        throw new Error("Server recognition is disabled");
+      }
+      const recognition = await recognizeCardImage(
+        prepared,
+        cardLanguage === "fr" ? "fr" : "en",
+        controller.signal,
+      );
       if (attempt !== recognitionAttempt || controller.signal.aborted) return;
+      progress = 100;
+      const textResult: ParsedCardText = {
+        rawText: "",
+        ...recognition.evidence,
+      };
       parsed = textResult;
-      await findCandidates(textResult, fingerprint, prepared);
+      await showCandidates(
+        textResult,
+        recognition.cards,
+        recognition.visualMatches.map((match) => ({
+          ...match,
+          provider: "server-model" as const,
+        })),
+      );
     } catch (error) {
       if (attempt !== recognitionAttempt || controller.signal.aborted) return;
       console.error(error);
-      errorMessage = translate(locale, "scanner.error");
+      errorMessage = scanFailureMessage(error);
       stage = "error";
     } finally {
       if (recognitionController === controller) recognitionController = null;
@@ -277,8 +277,9 @@
 
   async function findCandidates(
     text: ParsedCardText,
-    fingerprint?: ImageFingerprint,
-    blob?: Blob,
+    visualMatches: VisualMatch[] = [],
+    signal?: AbortSignal,
+    attempt = recognitionAttempt,
   ): Promise<void> {
     const language = selectedCardLanguage();
     if (!language) return;
@@ -293,43 +294,29 @@
         text,
         language,
         locale,
-        undefined,
+        signal,
         valuationPreference,
       );
-      let visualMatches: VisualMatch[] = [];
-      if (fingerprint && blob && cards.length) {
-        stage = "visual";
-        const [modelMatches, referenceMatches] = await Promise.all([
-          optionalWithTimeout(
-            runOptionalLocalModel(blob, fingerprint, config.vision),
-            [],
-          ),
-          optionalWithTimeout(
-            rerankWithReferenceImages(fingerprint, cards),
-            [],
-          ),
-        ]);
-        const bestByCard: VisualMatch[] = [];
-        for (const match of [...referenceMatches, ...modelMatches]) {
-          const index = bestByCard.findIndex(
-            (candidate) => candidate.cardId === match.cardId,
-          );
-          if (index < 0) bestByCard.push(match);
-          else if (bestByCard[index].similarity < match.similarity)
-            bestByCard[index] = match;
-        }
-        visualMatches = bestByCard;
-      }
-      decision = decideRecognition(scoreCandidates(text, cards, visualMatches));
-      selected = decision.status === "confident" ? decision.best : undefined;
-      stage = "results";
-      await tick();
-      resultsHeading?.focus();
+      if (attempt !== recognitionAttempt || signal?.aborted) return;
+      await showCandidates(text, cards, visualMatches);
     } catch (error) {
+      if (attempt !== recognitionAttempt || signal?.aborted) return;
       console.error(error);
-      errorMessage = translate(locale, "scanner.error");
+      errorMessage = scanFailureMessage(error);
       stage = "error";
     }
+  }
+
+  async function showCandidates(
+    text: ParsedCardText,
+    cards: Awaited<ReturnType<typeof searchCatalog>>,
+    visualMatches: VisualMatch[] = [],
+  ): Promise<void> {
+    decision = decideRecognition(scoreCandidates(text, cards, visualMatches));
+    selected = decision.status === "confident" ? decision.best : undefined;
+    stage = "results";
+    await tick();
+    resultsHeading?.focus();
   }
 
   async function manualSearch(event: SubmitEvent): Promise<void> {
@@ -349,7 +336,15 @@
       query: manualQuery.trim(),
     };
     parsed = manual;
-    await findCandidates(manual);
+    const attempt = ++recognitionAttempt;
+    recognitionController?.abort();
+    const controller = new AbortController();
+    recognitionController = controller;
+    try {
+      await findCandidates(manual, [], controller.signal, attempt);
+    } finally {
+      if (recognitionController === controller) recognitionController = null;
+    }
   }
 
   async function chooseCandidate(
@@ -543,11 +538,12 @@
       <Input
         id="manual-query"
         label={translate(locale, "scanner.manual")}
+        size="lg"
         bind:value={manualQuery}
         placeholder="Pikachu 025/165"
         required
       />
-      <Button type="submit" disabled={!online || !cardLanguage}
+      <Button type="submit" size="lg" disabled={!online || !cardLanguage}
         ><Icon name="search" size={18} />
         {translate(locale, "scanner.search")}</Button
       >

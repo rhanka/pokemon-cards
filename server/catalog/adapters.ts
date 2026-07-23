@@ -131,6 +131,13 @@ function slug(value: string): string {
 export interface ParsedCardSearchQuery {
   name: string;
   number: string | null;
+  setTotal: string | null;
+}
+
+interface CardSearchFilters {
+  includeName: boolean;
+  number: string | null;
+  setTotal: string | null;
 }
 
 function normalizedCollectorNumber(value: string): string {
@@ -140,12 +147,13 @@ function normalizedCollectorNumber(value: string): string {
 export function parseCardSearchQuery(query: string): ParsedCardSearchQuery {
   const normalized = query.trim().replace(/\s+/g, " ");
   const fraction = normalized.match(
-    /^(.+?)\s+([a-z]*\d+[a-z]*)\s*\/\s*[a-z0-9-]+$/i,
+    /^(?:(.+?)\s+)?([a-z]*\d+[a-z]*)\s*\/\s*([a-z0-9-]+)$/i,
   );
   if (fraction) {
     return {
-      name: fraction[1].trim(),
+      name: fraction[1]?.trim() ?? "",
       number: normalizedCollectorNumber(fraction[2]),
+      setTotal: normalizedCollectorNumber(fraction[3]),
     };
   }
 
@@ -154,10 +162,50 @@ export function parseCardSearchQuery(query: string): ParsedCardSearchQuery {
     return {
       name: promo[1].trim(),
       number: normalizedCollectorNumber(promo[2]),
+      setTotal: null,
     };
   }
 
-  return { name: normalized, number: null };
+  return { name: normalized, number: null, setTotal: null };
+}
+
+function cardSearchStrategies(
+  parsed: ParsedCardSearchQuery,
+): CardSearchFilters[] {
+  const filterableTotal =
+    parsed.setTotal && /^\d+$/.test(parsed.setTotal) ? parsed.setTotal : null;
+  const candidates: CardSearchFilters[] = [
+    {
+      includeName: true,
+      number: parsed.number,
+      setTotal: filterableTotal,
+    },
+    {
+      includeName: true,
+      number: parsed.number,
+      setTotal: null,
+    },
+    { includeName: true, number: null, setTotal: null },
+    {
+      includeName: false,
+      number: parsed.number,
+      setTotal: filterableTotal,
+    },
+    { includeName: false, number: parsed.number, setTotal: null },
+  ];
+  const seen = new Set<string>();
+  return candidates.filter((filters) => {
+    const effectiveName = filters.includeName ? parsed.name : "";
+    if (!effectiveName && !filters.number) return false;
+    const key = JSON.stringify([
+      effectiveName,
+      filters.number,
+      filters.setTotal,
+    ]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export function makeCardId(input: {
@@ -623,10 +671,14 @@ export class TcgdexAdapter
     limit: number,
   ): Promise<PokemonCard[]> {
     const parsed = parseCardSearchQuery(query);
-    const request = async (number: string | null): Promise<unknown[]> => {
+    const request = async (filters: CardSearchFilters): Promise<unknown[]> => {
       const url = endpoint(this.baseUrl, `${language}/cards`);
-      url.searchParams.set("name", parsed.name);
-      if (number) url.searchParams.set("localId", number);
+      if (filters.includeName && parsed.name)
+        url.searchParams.set("name", parsed.name);
+      if (filters.number) url.searchParams.set("localId", filters.number);
+      if (filters.setTotal && /^\d+$/.test(filters.setTotal)) {
+        url.searchParams.set("set.cardCount.official", filters.setTotal);
+      }
       url.searchParams.set("pagination:itemsPerPage", String(limit));
       const payload = await this.json(url);
       return Array.isArray(payload)
@@ -636,8 +688,11 @@ export class TcgdexAdapter
             Math.min(limit, MAX_PROVIDER_CARDS),
           );
     };
-    let rawCards = await request(parsed.number);
-    if (parsed.number && rawCards.length === 0) rawCards = await request(null);
+    let rawCards: unknown[] = [];
+    for (const filters of cardSearchStrategies(parsed)) {
+      rawCards = await request(filters);
+      if (rawCards.length > 0) break;
+    }
     return rawCards
       .slice(0, limit)
       .map((card) => normalizeTcgdexCard(card, language, this.clock()));
@@ -686,24 +741,32 @@ export class PokemonTcgAdapter
     // in the adapter contract makes this limitation explicit to the caller.
     void language;
     const parsed = parseCardSearchQuery(query);
-    const request = async (number: string | null): Promise<JsonRecord[]> => {
+    const request = async (
+      filters: CardSearchFilters,
+    ): Promise<JsonRecord[]> => {
       const url = endpoint(this.baseUrl, "cards");
-      const escapedName = parsed.name
-        .replaceAll("\\", "\\\\")
-        .replaceAll('"', '\\"');
-      const escapedNumber = number
+      const escapedName = filters.includeName
+        ? parsed.name.replaceAll("\\", "\\\\").replaceAll('"', '\\"')
+        : "";
+      const escapedNumber = filters.number
         ?.replaceAll("\\", "\\\\")
         .replaceAll('"', '\\"');
-      url.searchParams.set(
-        "q",
-        `name:"${escapedName}"${escapedNumber ? ` number:"${escapedNumber}"` : ""}`,
-      );
+      const terms: string[] = [];
+      if (escapedName) terms.push(`name:"${escapedName}"`);
+      if (escapedNumber) terms.push(`number:"${escapedNumber}"`);
+      if (filters.setTotal && /^\d+$/.test(filters.setTotal)) {
+        terms.push(`set.printedTotal:${filters.setTotal}`);
+      }
+      url.searchParams.set("q", terms.join(" "));
       url.searchParams.set("pageSize", String(limit));
       const payload = record(await this.json(url, this.headers()));
       return records(payload?.data, Math.min(limit, MAX_PROVIDER_CARDS));
     };
-    let cards = await request(parsed.number);
-    if (parsed.number && cards.length === 0) cards = await request(null);
+    let cards: JsonRecord[] = [];
+    for (const filters of cardSearchStrategies(parsed)) {
+      cards = await request(filters);
+      if (cards.length > 0) break;
+    }
     return cards
       .slice(0, limit)
       .map((card) => normalizePokemonTcgCard(card, this.clock()));

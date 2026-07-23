@@ -1,16 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  prepareImageForRecognition,
-  rerankWithReferenceImages,
-} from "../../src/lib/image-fingerprint";
+import { prepareImageForRecognition } from "../../src/lib/image-upload";
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-describe("image input safeguards", () => {
-  it("should reject empty and unsupported image input before starting OCR work", async () => {
+describe("recognition image upload safeguards", () => {
+  it("should reject empty and unsupported image input before upload", async () => {
     await expect(
       prepareImageForRecognition(new Blob([], { type: "image/jpeg" })),
     ).rejects.toThrow("empty");
@@ -21,7 +18,7 @@ describe("image input safeguards", () => {
     ).rejects.toThrow("Unsupported");
   });
 
-  it("should downscale an oversized pixel surface before handing it to OCR", async () => {
+  it("should center-crop, downscale, and re-encode before upload", async () => {
     const close = vi.fn();
     vi.stubGlobal(
       "createImageBitmap",
@@ -29,8 +26,11 @@ describe("image input safeguards", () => {
     );
     const canvas = document.createElement("canvas");
     const drawImage = vi.fn();
+    const fillRect = vi.fn();
     vi.spyOn(canvas, "getContext").mockReturnValue({
       drawImage,
+      fillRect,
+      fillStyle: "",
     } as unknown as CanvasRenderingContext2D);
     vi.spyOn(canvas, "toBlob").mockImplementation((callback) => {
       callback(new Blob(["resized"], { type: "image/jpeg" }));
@@ -41,35 +41,22 @@ describe("image input safeguards", () => {
       new Blob(["source"], { type: "image/jpeg" }),
     );
 
-    expect(canvas.width).toBe(2048);
-    expect(canvas.height).toBe(1024);
+    expect(canvas.width).toBe(1145);
+    expect(canvas.height).toBe(1600);
     expect(drawImage).toHaveBeenCalledOnce();
+    expect(drawImage).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.closeTo(1314.91, 1),
+      0,
+      expect.closeTo(1466.18, 1),
+      2048,
+      0,
+      0,
+      1145,
+      1600,
+    );
+    expect(fillRect).toHaveBeenCalledOnce();
     expect(result.type).toBe("image/jpeg");
     expect(close).toHaveBeenCalledOnce();
-  });
-
-  it("should fail open when an optional remote reference image cannot be fetched", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn<typeof fetch>()
-        .mockRejectedValue(new Error("cross-origin blocked")),
-    );
-
-    await expect(
-      rerankWithReferenceImages(
-        {
-          perceptualHash: "0000000000000000",
-          rgbHash: Array.from({ length: 48 }, () => 0),
-        },
-        [
-          {
-            id: "card-1",
-            name: "Pikachu",
-            images: { small: "https://images.example.test/card.jpg" },
-          },
-        ],
-      ),
-    ).resolves.toEqual([]);
   });
 });

@@ -131,7 +131,7 @@ describe("catalogue adapters", () => {
     expect(request?.headers).toMatchObject({ "X-Api-Key": "test-key" });
   });
 
-  it("should filter TCGdex by OCR number, retry by name, and keep summary printings distinct", async () => {
+  it("should retry TCGdex without an erroneous set total and keep summary printings distinct", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -161,10 +161,39 @@ describe("catalogue adapters", () => {
     const fallbackUrl = new URL(String(fetchMock.mock.calls[1][0]));
     expect(preciseUrl.searchParams.get("name")).toBe("Pikachu");
     expect(preciseUrl.searchParams.get("localId")).toBe("25");
+    expect(preciseUrl.searchParams.get("set.cardCount.official")).toBe("165");
     expect(fallbackUrl.searchParams.get("name")).toBe("Pikachu");
-    expect(fallbackUrl.searchParams.has("localId")).toBe(false);
+    expect(fallbackUrl.searchParams.get("localId")).toBe("25");
+    expect(fallbackUrl.searchParams.has("set.cardCount.official")).toBe(false);
     expect(cards.map((card) => card.set.id)).toEqual(["base1", "base2"]);
     expect(new Set(cards.map((card) => card.id)).size).toBe(2);
+  });
+
+  it("should search TCGdex by collector number and set total when OCR has no usable name", async () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          JSON.stringify([
+            { id: "base1-58", localId: "58", name: "Pikachu" },
+            { id: "hgss4-58", localId: "58", name: "Bronzor" },
+          ]),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    const adapter = new TcgdexAdapter({
+      baseUrl: "https://tcgdex.example/v2",
+      fetch: fetchMock,
+      clock: () => FIXED_NOW,
+    });
+
+    const cards = await adapter.search("58/102", "en", 12);
+
+    const requestUrl = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(requestUrl.searchParams.has("name")).toBe(false);
+    expect(requestUrl.searchParams.get("localId")).toBe("58");
+    expect(requestUrl.searchParams.get("set.cardCount.official")).toBe("102");
+    expect(cards.map((card) => card.name)).toEqual(["Pikachu", "Bronzor"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("should combine parsed promo name and number in a Pokémon TCG API query", async () => {
@@ -418,6 +447,33 @@ describe("catalogue service cache and fallback", () => {
       });
       expect(primarySearch).toHaveBeenCalledTimes(1);
       expect(secondarySearch).not.toHaveBeenCalled();
+    } finally {
+      store.close();
+    }
+  });
+
+  it("should never persist a manual or OCR search phrase in a cache key", async () => {
+    const store = new SqliteStore(":memory:");
+    const service = new CatalogueService({
+      primary: testAdapter("tcgdex", { search: vi.fn(async () => []) }),
+      secondary: testAdapter("pokemon_tcg"),
+      enabledSources: ["tcgdex"],
+      cardImagesEnabled: false,
+      marketQuotesEnabled: false,
+      cache: store,
+      clock: () => FIXED_NOW,
+    });
+
+    try {
+      await service.search("Private binder note 58/102", "en", 12);
+      const keys = store.database
+        .prepare("SELECT cache_key FROM catalogue_cache")
+        .all() as Array<{ cache_key: string }>;
+
+      expect(keys).toHaveLength(1);
+      expect(keys[0].cache_key).toContain(":sha256:");
+      expect(keys[0].cache_key).not.toContain("private");
+      expect(keys[0].cache_key).not.toContain("58/102");
     } finally {
       store.close();
     }

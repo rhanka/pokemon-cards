@@ -3,6 +3,8 @@ import { formatCurrencySafely } from "./money";
 
 const en = {
   "app.tagline": "Know every card. Keep every cent.",
+  "app.valuationPending":
+    "Identification is live. Market values remain unavailable until commercial quote-feed rights are confirmed.",
   "nav.scanner": "Scanner",
   "nav.collection": "Collection",
   "nav.insights": "Insights",
@@ -14,7 +16,7 @@ const en = {
   "common.loading": "Loading…",
   "common.unavailable": "Unavailable",
   "common.offline": "Offline — your collection is still available",
-  "scanner.eyebrow": "Private on-device scan",
+  "scanner.eyebrow": "Private transient scan",
   "scanner.title": "Frame one Pokémon card",
   "scanner.help":
     "Fill the guide, avoid glare, and keep the collector number visible.",
@@ -23,14 +25,20 @@ const en = {
   "scanner.capture": "Capture card",
   "scanner.stop": "Close camera",
   "scanner.privacy":
-    "Your photo stays on this device and is discarded after matching.",
-  "scanner.processing": "Reading the card locally",
+    "Your cropped photo is encrypted in transit, processed in memory, and never stored or used for training. Only the extracted name and number are sent to TCGdex for candidates.",
+  "scanner.processing": "Reading the card securely",
   "scanner.searching": "Searching the catalogue",
-  "scanner.model": "Checking visual references locally",
+  "scanner.model": "Checking server recognition",
   "scanner.error":
     "This card could not be read. Try a sharper, glare-free photo.",
+  "scanner.busy":
+    "Recognition is busy right now. Wait a few seconds and try again.",
+  "scanner.timeout":
+    "Recognition took too long. Try again with a tighter, sharper photo.",
+  "scanner.catalogueUnavailable":
+    "The card catalogue is temporarily unavailable. Try again shortly.",
   "scanner.offlineSearch":
-    "Connect once to search the catalogue. No photo will be uploaded.",
+    "Connect to scan with server recognition. Manual catalogue search remains available online.",
   "scanner.results": "Possible matches",
   "scanner.matchScore": "Match score: {score}%",
   "scanner.confident": "Strong match — please confirm",
@@ -115,7 +123,7 @@ const en = {
   "settings.noAds": "No ads · No data resale",
   "settings.localFirst": "Local-first by design",
   "settings.localDetail":
-    "Scans and collection events are stored on this device. Photos are never saved.",
+    "Collection events stay on this device by default. Scan photos are processed transiently by the server and never saved.",
   "settings.exportJson": "Backup as JSON",
   "settings.exportCsv": "Export spreadsheet CSV",
   "settings.importJson": "Restore JSON backup",
@@ -179,6 +187,8 @@ type TranslationKey = keyof typeof en;
 
 const fr: Record<TranslationKey, string> = {
   "app.tagline": "Connaissez chaque carte. Gardez chaque sou.",
+  "app.valuationPending":
+    "L’identification est active. Les valeurs de marché restent indisponibles tant que les droits commerciaux du flux de prix ne sont pas confirmés.",
   "nav.scanner": "Scanner",
   "nav.collection": "Collection",
   "nav.insights": "Valeur",
@@ -190,7 +200,7 @@ const fr: Record<TranslationKey, string> = {
   "common.loading": "Chargement…",
   "common.unavailable": "Indisponible",
   "common.offline": "Hors ligne — votre collection reste disponible",
-  "scanner.eyebrow": "Scan privé sur cet appareil",
+  "scanner.eyebrow": "Scan privé et transitoire",
   "scanner.title": "Cadrez une carte Pokémon",
   "scanner.help":
     "Remplissez le cadre, évitez les reflets et gardez le numéro visible.",
@@ -199,14 +209,20 @@ const fr: Record<TranslationKey, string> = {
   "scanner.capture": "Photographier la carte",
   "scanner.stop": "Fermer la caméra",
   "scanner.privacy":
-    "La photo reste sur cet appareil et est supprimée après la recherche.",
-  "scanner.processing": "Lecture locale de la carte",
+    "La photo recadrée est chiffrée en transit, traitée en mémoire et n’est ni conservée ni utilisée pour entraîner un modèle. Seuls le nom et le numéro extraits sont envoyés à TCGdex pour trouver les candidats.",
+  "scanner.processing": "Lecture sécurisée de la carte",
   "scanner.searching": "Recherche dans le catalogue",
-  "scanner.model": "Comparaison visuelle locale",
+  "scanner.model": "Vérification par le service de reconnaissance",
   "scanner.error":
     "Carte illisible. Essayez une photo plus nette et sans reflet.",
+  "scanner.busy":
+    "Le service de reconnaissance est occupé. Patientez quelques secondes puis réessayez.",
+  "scanner.timeout":
+    "La reconnaissance a pris trop de temps. Recadrez la carte et réessayez.",
+  "scanner.catalogueUnavailable":
+    "Le catalogue de cartes est temporairement indisponible. Réessayez bientôt.",
   "scanner.offlineSearch":
-    "Connectez-vous une fois pour chercher le catalogue. Aucune photo ne sera envoyée.",
+    "Connectez-vous pour utiliser la reconnaissance serveur. La recherche manuelle reste disponible en ligne.",
   "scanner.results": "Correspondances possibles",
   "scanner.matchScore": "Score de correspondance : {score} %",
   "scanner.confident": "Bonne correspondance — à confirmer",
@@ -292,7 +308,7 @@ const fr: Record<TranslationKey, string> = {
   "settings.noAds": "Sans publicité · Sans revente de données",
   "settings.localFirst": "Local par conception",
   "settings.localDetail":
-    "Scans et événements restent sur cet appareil. Les photos ne sont jamais enregistrées.",
+    "Les événements de collection restent par défaut sur cet appareil. Les photos de scan sont traitées transitoirement par le serveur et ne sont jamais enregistrées.",
   "settings.exportJson": "Sauvegarde JSON",
   "settings.exportCsv": "Exporter en CSV",
   "settings.importJson": "Restaurer une sauvegarde JSON",

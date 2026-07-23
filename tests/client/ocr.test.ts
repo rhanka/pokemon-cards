@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCardText } from "../../src/lib/ocr";
+import { parseCardText } from "../../shared/card-text";
 
 describe("card text parser", () => {
   it("should extract the printed name and collector number from noisy OCR lines", () => {
@@ -20,6 +20,25 @@ describe("card text parser", () => {
       expect.arrayContaining(["card-name", "collector-number", "set-total"]),
     );
     expect(result.confidence).toBeGreaterThan(0.8);
+  });
+
+  it("should recover a name joined to HP and ignore effect sentences", () => {
+    const result = parseCardText([
+      { text: "Basic Pokémon", confidence: 96 },
+      { text: "Pikachu 40 HP D", confidence: 35 },
+      { text: "JA AS A", confidence: 35 },
+      { text: "Gnaw 10", confidence: 84 },
+      { text: "Thunder Jolt Flip a coin. If tails,", confidence: 92 },
+      { text: "Pikachu does 10 damage to itself.", confidence: 96 },
+      { text: "S58/102", confidence: 65 },
+    ]);
+
+    expect(result).toMatchObject({
+      name: "Pikachu",
+      number: "58",
+      setTotal: "102",
+      query: "Pikachu 58/102",
+    });
   });
 
   it("should preserve alphanumeric gallery collector numbers", () => {
@@ -44,5 +63,24 @@ describe("card text parser", () => {
 
     expect(result.name).toBeUndefined();
     expect(result.number).toBe("101");
+  });
+
+  it("should treat combined English and French card headers as noise", () => {
+    const english = parseCardText([
+      { text: "Basic Pokémon", confidence: 98 },
+      { text: "58/102", confidence: 93 },
+    ]);
+    const french = parseCardText([
+      { text: "Pokémon de base", confidence: 98 },
+      { text: "58/102", confidence: 93 },
+    ]);
+
+    expect(english).toMatchObject({
+      name: undefined,
+      number: "58",
+      setTotal: "102",
+      query: "58/102",
+    });
+    expect(french.name).toBeUndefined();
   });
 });

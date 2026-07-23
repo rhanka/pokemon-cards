@@ -1,36 +1,20 @@
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const output = path.join(root, "public", "ocr", "v6");
+const output = path.join(root, "recognition-data");
+await rm(path.join(root, "public", "ocr"), { recursive: true, force: true });
 
 const copies = [
-  ["node_modules/tesseract.js/dist/worker.min.js", "worker.min.js"],
   ["node_modules/tesseract.js/LICENSE.md", "LICENSE-APACHE-2.0.txt"],
   [
-    "node_modules/tesseract.js-core/tesseract-core.wasm.js",
-    "core/tesseract-core.wasm.js",
-  ],
-  [
-    "node_modules/tesseract.js-core/tesseract-core-simd.wasm.js",
-    "core/tesseract-core-simd.wasm.js",
-  ],
-  [
-    "node_modules/tesseract.js-core/tesseract-core-lstm.wasm.js",
-    "core/tesseract-core-lstm.wasm.js",
-  ],
-  [
-    "node_modules/tesseract.js-core/tesseract-core-simd-lstm.wasm.js",
-    "core/tesseract-core-simd-lstm.wasm.js",
-  ],
-  [
     "node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz",
-    "lang/eng.traineddata.gz",
+    "eng.traineddata.gz",
   ],
   [
     "node_modules/@tesseract.js-data/fra/4.0.0_best_int/fra.traineddata.gz",
-    "lang/fra.traineddata.gz",
+    "fra.traineddata.gz",
   ],
 ];
 
@@ -87,6 +71,6 @@ SOFTWARE.
 `;
 await writeFile(
   path.join(output, "THIRD_PARTY_NOTICES.txt"),
-  `CardScope self-hosted OCR assets\n${notices.join("\n")}\n${mitText}`,
+  `CardScope server recognition assets\n${notices.join("\n")}\n${mitText}`,
   "utf8",
 );

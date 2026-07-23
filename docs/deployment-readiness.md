@@ -1,21 +1,38 @@
 # Deployment readiness record
 
-Read-only evidence collected on 22 July 2026. This record separates a buildable workload from an authorised production deployment.
+Read-only evidence collected on 22–23 July 2026. This record separates a buildable workload from an authorised production deployment.
 
 ## Verdict
 
-- **Local-only application:** GO after repository validation.
-- **Scaleway production workload:** NO-GO until the gates below are applied and re-audited.
+- **Application build:** GO after the current validation and immutable publish.
+- **Scaleway POC workload:** owner-authorised at an explicit 20m CPU request;
+  apply only after the new digest and immediate capacity recheck.
 - **Cloud history/sync claim:** NO-GO; `OIDC_REQUIRED=false` is mandatory meanwhile.
-- **OVH:** NO-GO because no active cluster, ingress, storage mapping, or kubeconfig was available.
+- **OVH scale tier:** planned after application validation; no active target
+  cluster, ingress, storage mapping, or kubeconfig was available in this audit.
 
 ## Scaleway evidence
 
 - Kapsule `poc`, Kubernetes 1.35.3, Traefik, cert-manager, ACME issuers, `sbs-default`, and retained CSI snapshot classes exist.
-- The proposed tenant contract exists only in sibling-repository commit `409e37c48abfc4a96f3e42360381b256a49af153`; it was not applied. The `pokemon-cards` namespace returned `NotFound`.
-- The general node exposed 1.8 CPU allocatable and 1.776 CPU already requested: only 24m remained. The application requests 50m and a bounded backup Job would need roughly another 50m.
+- The proposed tenant contract exists in sibling-repository commit
+  `409e37c48abfc4a96f3e42360381b256a49af153`; client dry-run passes for all
+  seven resources, but it has not been applied and the namespace is absent.
+- The latest operator recheck observed 1.8 CPU allocatable and 1.766 CPU
+  requested: 34m nominally free. An explicit `requests.cpu: 20m` is accepted
+  by the tenant LimitRange/ResourceQuota and would leave 14m at that instant.
+  Pending workloads can race for it, so this is rechecked immediately before
+  apply. No second node or pool change is authorised.
+- OCR measured about 183 MiB RSS in the unrestricted run and returned to an
+  approximately 86 MiB working set in the limited OCI smoke. The workload
+  requests 256 MiB and limits memory to 384 MiB. The live node had about
+  1,603 MiB nominal memory headroom; the tenant quota accepts the request but
+  caps aggregate requested memory at exactly 256 MiB. `Recreate` therefore
+  fits one app pod, while a backup or second app pod cannot coexist without a
+  separately approved quota/capacity change.
 - `pokemon-cards.sent-tech.ca` had no DNS record.
-- No immutable public `ghcr.io/rhanka/pokemon-cards@sha256:…` image existed.
+- Repository `rhanka/pokemon-cards`, green CI, and an earlier immutable GHCR
+  digest exist. That older digest does not attest the 20m/server-recognition
+  release and must not be deployed; a new commit digest is required.
 - CSI snapshots are not a five-year off-volume backup. No approved object bucket, KMS/IAM contract, lifecycle, erasure path, monitoring, or isolated restore rehearsal existed.
 
 No cluster or sibling-repository mutation was made during this audit.
@@ -35,13 +52,19 @@ OIDC proves identity, not payment entitlement. The current API has no approved, 
 
 ## Publication evidence
 
-The intended GitHub repository `rhanka/pokemon-cards` did not exist when checked, and the local GitHub CLI credential was invalid. The source can be committed locally without that credential, but repository creation, GHCR publication, CI execution, protected-environment approval, and digest deployment require a valid owner-authenticated GitHub session.
+The public repository is `https://github.com/rhanka/pokemon-cards`. The
+original publish workflow and provenance-attested image passed. The next
+deployment is deliberately blocked on the new commit's immutable digest; the
+operator will not substitute the earlier artifact.
 
 ## Re-audit order
 
-1. Apply/review the tenant contract and provide at least 100m combined workload/backup request headroom.
-2. Approve the off-PVC encrypted backup, expiry/erasure, and quarterly isolated restore contract.
-3. Register and return the exact OIDC public-client contract plus a time-bound Cloud Pass entitlement contract; keep sync disabled until the first restore succeeds.
-4. Create DNS and a namespace-scoped CI identity.
-5. Create the GitHub repository, run CI, publish the commit-tagged image, and record its registry digest.
-6. Invoke the protected deploy workflow with that commit and digest; verify TLS, health, resources, logs, and rollback.
+1. Validate, commit, push, run CI, and record the new immutable GHCR digest.
+2. Recheck at least 20m CPU and the 256 MiB memory request on the live node.
+3. Apply the tenant contract, server-side dry-run the application render, and
+   apply the pinned digest through the owner-operated POC path.
+4. Verify PVC, Deployment, Service endpoints, and Traefik route before DNS.
+5. Create the Cloudflare DNS record, then verify public TLS, health, resource
+   limits, logs, and rollback.
+6. Separately approve off-PVC backup/restore, OIDC client, and time-bound
+   entitlement before ever enabling cloud sync.

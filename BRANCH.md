@@ -6,17 +6,17 @@
 
 ## Scope / Guardrails
 
-- [x] Keep scan inference local by default and never persist a photo without explicit consent.
+- [x] Keep scan inference in the TypeScript service, transient in memory, and never persist or train on a photo.
 - [x] Keep finish, language, and condition user-confirmed; never claim authentication or automated grading.
 - [x] Use only catalogue, price, code, dataset, and model assets with documented compatible provenance.
 - [x] Keep free-user marginal server cost near zero and cap paid price at complete cost plus 50%.
-- [x] Deploy only to the live Scaleway `poc` path; keep OVH forbidden until its platform is operational.
+- [x] Deploy the current POC to the live Scaleway path at 20m requested CPU; defer the OVH scale migration until its platform is operational.
 - [x] Keep all new product and code text in English; French is a supported UI locale.
 
 ## Branch Scope Boundaries
 
 - [x] Allowed paths: `src/**`, `server/**`, `shared/**`, `tests/**`, `e2e/**`, `public/**`, `ml/**`, `docs/**`, `spec/**`, `deploy/**`, `scripts/**`.
-- [x] Allowed root files: `BRANCH.md`, `README.md`, `LICENSE`, `package.json`, `package-lock.json`, `tsconfig*.json`, `vite.config.ts`, `vitest.config.ts`, `svelte.config.js`, `Dockerfile`, `.dockerignore`, `.gitignore`, `.env.example`.
+- [x] Allowed root files: `BRANCH.md`, `README.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md`, `index.html`, `package.json`, `package-lock.json`, `tsconfig*.json`, `vite.config.ts`, `vitest.config.ts`, `svelte.config.js`, `Dockerfile`, `.dockerignore`, `.gitignore`, `.env.example`.
 - [x] Forbidden paths: `../poc-k8s/**`, `../sentropic/**`, `Makefile`, `docker-compose*.yml`, `.cursor/rules/**`.
 - [x] Conditional paths: `.github/workflows/**` only under `BR01-EX1`.
 - [x] BR01-EX1: add CI and deployment workflows because repository publication and Kubernetes delivery are explicit scope; impact is repository automation; rollback is deleting the workflows without changing runtime data.
@@ -50,7 +50,7 @@
   - [x] Lot gate: `npm run test -- tests/server` and `npm run check`.
 - [x] Lot 2 — Mobile PWA, recognition, collection, and ROI UX
   - [x] Add installable shell, service worker, responsive navigation, camera/file capture, crop guide, and offline states.
-  - [x] Add local OCR parsing, perceptual color-hash reranking, optional model adapter, score fusion, top candidates, and abstention.
+  - [x] Add client crop/re-encoding, transient server OCR, catalogue candidate scoring, top candidates, and abstention.
   - [x] Add IndexedDB event-sourced holdings, duplicate quantities, condition/finish confirmation, activity history, import, JSON/CSV export, and sync batching.
   - [x] Add sourced low/median/high value, freshness, liquidity confidence, cost basis, net-value explanation, and cards-to-review prioritization.
   - [x] Add French and English product copy with accessible touch targets, keyboard states, reduced motion, and no dark-pattern paywall.
@@ -74,9 +74,18 @@
   - [ ] Lot gate: `npm run validate`, OCI build, Kubernetes server-side dry-run, and local `/api/health` smoke.
 - [ ] Lot 5 — Final validation, publication, and production smoke
   - [x] Run static, unit, integration, build, accessibility, security, container, and manifest gates.
-  - [ ] Run a mobile browser smoke for capture, search, add, edit, export, offline reload, OIDC-disabled fallback, and health.
+  - [x] Run a mobile browser smoke for capture, search, add, edit, export, offline reload, OIDC-disabled fallback, and health.
   - [x] Run consensus review with at least two independent peers and reconcile all high-confidence findings.
   - [ ] Stage only intended files, commit all lots, create `rhanka/pokemon-cards`, and push the intended branch.
   - [ ] Build/publish the immutable GHCR image and deploy only after owner-controlled infra gates are satisfied.
   - [ ] Verify public TLS, `/api/health`, no console errors, image tag, resources, and rollback command.
   - [ ] Lot gate: clean repository status, green CI, public production smoke, and documented remaining benchmark/legal gates.
+- [ ] Lot 6 — Measured server recognition and one-million-card economics
+  - [x] Replace browser OCR/reference-image code with one bounded Tesseract.js worker in the Node service.
+  - [x] Center-crop and re-encode uploads, strip EXIF, enforce 2 MiB/4 MP, hash search cache keys, clear Tesseract MEMFS/native Pix, and avoid raw OCR persistence.
+  - [x] Fuse recognition and catalogue lookup so OCR evidence is never put in a query URL.
+  - [x] Normalize sync events and deduplicate shared catalogue/quote snapshots; measure <=700 bytes SQLite per representative add.
+  - [x] Add a deterministic TypeScript simulation for 1,000 accounts ×1,000 cards and a 256 MiB cache byte cap.
+  - [x] Set Kubernetes requests to 20m/256Mi, limits to 300m/384Mi, keep Recreate, and enable only MIT TCGdex metadata.
+  - [x] Rebenchmark the exact Alpine image at 300m/384Mi after the Tesseract privacy reinitialization.
+  - [ ] Publish the new immutable digest, owner-apply the POC after live capacity recheck, then create DNS and run the public smoke.
