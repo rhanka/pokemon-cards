@@ -17,10 +17,13 @@
       "terms_url": "https://example.invalid/cardscope-fixture/terms",
       "terms_verified_at": "2026-07-22T00:00:00Z",
       "commercial_use_allowed": true,
+      "noncommercial_use_allowed": true,
       "derivatives_allowed": true,
       "ml_training_allowed": true,
       "model_redistribution_allowed": true,
+      "noncommercial_model_redistribution_allowed": true,
       "asset_redistribution_allowed": true,
+      "upstream_rights_verified": true,
       "attribution": "No attribution required for the invented fixture metadata.",
       "notes": "No image file, Pokemon artwork, or model weight is included in this fixture."
     }

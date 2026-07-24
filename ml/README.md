@@ -5,9 +5,9 @@ training and evaluation. It does **not** contain card images, datasets,
 pretrained weights, or model artifacts. MobileNetV3-Small is created with
 `weights=None`; the commands never fetch a checkpoint.
 
-The release target is a 224 px MobileNetV3-Small encoder with a L2-normalized 128-dimensional
-embedding. Recognition is nearest-reference retrieval, complemented by OCR in the application.
-It is not card authentication or condition grading.
+The release target is a 224 px MobileNetV3-Small encoder with a L2-normalized
+128-dimensional embedding. Recognition is nearest-reference retrieval in a
+browser Web Worker; it is not card authentication or condition grading.
 
 ## Rights gate
 
@@ -17,13 +17,21 @@ all rights statements are explicit booleans. There are separate policies for:
 
 - `inspect`: validate provenance only;
 - `train`: require commercial use, derivatives, and ML training permission;
+- `train-noncommercial-experiment`: allow only a local non-commercial
+  experiment when the source explicitly allows non-commercial derivatives and
+  ML training; it is not a release permission;
 - `publish-model`: additionally require permission to redistribute derived weights;
+- `publish-model-noncommercial`: additionally requires explicit
+  non-commercial model redistribution **and** verified upstream rights;
 - `publish-assets`: additionally require permission to redistribute source images.
 
-Repository or dataset license badges do not establish rights to upstream Pokemon artwork. Obtain
-written permission or another independently reviewed basis before training. Do not publish an
-export merely because the command succeeded. `schemas/rights-manifest.schema.json` documents the
-wire contract; `tests/fixtures/rights_manifest.json` contains invented metadata and no images.
+Repository or dataset license badges do not establish rights to upstream Pokemon
+artwork. The owner-approved `TheFusion21/PokemonCards` intake is recorded as a
+local CC-BY-NC experiment only: its external image authority remains
+unverified, so `publish-model-noncommercial` refuses it. Do not publish an
+export merely because training succeeds. `schemas/rights-manifest.schema.json`
+documents the wire contract; `tests/fixtures/rights_manifest.json` contains
+invented metadata and no images.
 
 ## Lightweight setup and deterministic gate
 
@@ -91,7 +99,8 @@ captures and satisfy all of these gates before enabling the model as the primary
 - open-set false-accept rate < 0.5% with enough unknown probes to resolve that rate;
 - expected calibration error <= 5% and a calibrated abstention threshold;
 - corrections < 5%, pipeline p95 < 250 ms on named target phones, and INT8 model <= 5 MiB;
-- explicit `publish-model` rights approval for every contributing source.
+- explicit `publish-model` or `publish-model-noncommercial` rights approval
+  for every contributing source, as applicable.
 
 `schemas/benchmark-report.schema.json` requires sample counts, split and manifest fingerprints,
 artifact sizes, and per-device latency. Release eligibility fails closed unless it also records at
