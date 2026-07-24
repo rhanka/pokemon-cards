@@ -9,6 +9,8 @@
   "scripts": {
     "prepare:recognition": "node scripts/prepare-recognition-assets.mjs",
     "acquire:noncommercial-pilot": "tsx scripts/acquire-noncommercial-pilot.ts",
+    "scrape:pokemon-cards": "tsx scripts/scrape-pokemon-cards.ts",
+    "build:visual-model": "tsx scripts/build-visual-model.ts",
     "simulate:economics": "node --import tsx scripts/simulate-economics.ts",
     "predev": "npm run prepare:recognition",
     "dev": "concurrently -k -n api,web -c blue,green \"npm:dev:server\" \"npm:dev:client\"",

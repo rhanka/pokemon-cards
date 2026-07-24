@@ -1,0 +1,225 @@
+import { resolve } from "node:path";
+
+export const EXPERIMENTAL_OPERATION = "train-noncommercial-experiment";
+
+export interface ModelBuildOptions {
+  acknowledgeExperimentalModel: boolean;
+  assets: string;
+  benchmark: boolean;
+  calibrationSamples: number;
+  device: string;
+  epochs: number;
+  exportOnnx: boolean;
+  index: boolean;
+  manifest: string;
+  operation: "train" | typeof EXPERIMENTAL_OPERATION;
+  output: string;
+  python: string;
+  seed: number;
+}
+
+export interface ModelBuildPlan {
+  commands: Array<{ name: string; args: string[] }>;
+  benchmarkPreflight: "not-requested" | "ready" | "missing-captures-or-unknowns";
+}
+
+function usage(): never {
+  throw new Error(
+    [
+      "Usage: npm run build:visual-model -- --acknowledge-experimental-model --manifest=<rights-manifest.json> --assets=<assets> [options]",
+      "Options: --output=<ignored directory> --epochs=<1..200> --seed=<integer> --device=<auto|cpu|cuda>",
+      "         --operation=<train|train-noncommercial-experiment> --python=<executable>",
+      "         --export --index --benchmark --calibration-samples=<1..4096>",
+      "This runner never accepts --release and never deploys or publishes an artifact.",
+    ].join("\n"),
+  );
+}
+
+function parsePositiveInteger(value: string | undefined, name: string, maximum: number): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > maximum) {
+    throw new Error(`${name} must be an integer between 1 and ${maximum}`);
+  }
+  return parsed;
+}
+
+function parseSeed(value: string | undefined): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 2 ** 31 - 1) {
+    throw new Error("--seed must be a non-negative 32-bit integer");
+  }
+  return parsed;
+}
+
+export function parseModelBuildOptions(arguments_: string[], cwd = process.cwd()): ModelBuildOptions {
+  const values = new Map<string, string>();
+  let acknowledgeExperimentalModel = false;
+  let benchmark = false;
+  let exportOnnx = false;
+  let index = false;
+  for (const argument of arguments_) {
+    if (argument === "--acknowledge-experimental-model") acknowledgeExperimentalModel = true;
+    else if (argument === "--benchmark") benchmark = true;
+    else if (argument === "--export") exportOnnx = true;
+    else if (argument === "--index") index = true;
+    else if (argument.startsWith("--") && argument.includes("=")) {
+      const [key, value] = argument.slice(2).split("=", 2) as [string, string];
+      values.set(key, value);
+    } else usage();
+  }
+  const known = new Set([
+    "assets",
+    "calibration-samples",
+    "device",
+    "epochs",
+    "manifest",
+    "operation",
+    "output",
+    "python",
+    "seed",
+  ]);
+  if (!acknowledgeExperimentalModel || !values.has("manifest") || !values.has("assets")) usage();
+  for (const key of values.keys()) if (!known.has(key)) usage();
+  if (index && !exportOnnx) throw new Error("--index requires --export");
+
+  const operation = values.get("operation") ?? EXPERIMENTAL_OPERATION;
+  if (operation !== "train" && operation !== EXPERIMENTAL_OPERATION) {
+    throw new Error("--operation must be train or train-noncommercial-experiment");
+  }
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return {
+    acknowledgeExperimentalModel,
+    assets: resolve(cwd, values.get("assets")!),
+    benchmark,
+    calibrationSamples: parsePositiveInteger(
+      values.get("calibration-samples") ?? "128",
+      "--calibration-samples",
+      4096,
+    ),
+    device: values.get("device") ?? "auto",
+    epochs: parsePositiveInteger(values.get("epochs") ?? "20", "--epochs", 200),
+    exportOnnx,
+    index,
+    manifest: resolve(cwd, values.get("manifest")!),
+    operation,
+    output: resolve(cwd, values.get("output") ?? `ml/artifacts/visual-model-${timestamp}`),
+    python: values.get("python") ?? "python3",
+    seed: parseSeed(values.get("seed") ?? "20260722"),
+  };
+}
+
+export function createModelBuildPlan(
+  options: ModelBuildOptions,
+  roleCounts: Readonly<Record<string, number>>,
+): ModelBuildPlan {
+  const commands: Array<{ name: string; args: string[] }> = [
+    {
+      name: "validate-manifest",
+      args: [
+        "-m",
+        "cardscope_ml",
+        "validate-manifest",
+        "--manifest",
+        options.manifest,
+        "--asset-root",
+        options.assets,
+        "--operation",
+        options.operation,
+      ],
+    },
+    {
+      name: "train",
+      args: [
+        "-m",
+        "cardscope_ml",
+        "train",
+        "--manifest",
+        options.manifest,
+        "--asset-root",
+        options.assets,
+        "--output-dir",
+        options.output,
+        "--seed",
+        String(options.seed),
+        "--epochs",
+        String(options.epochs),
+        "--device",
+        options.device,
+        "--operation",
+        options.operation,
+      ],
+    },
+  ];
+  const canBenchmark = (roleCounts.capture ?? 0) > 0 && (roleCounts.unknown ?? 0) > 0;
+  if (options.benchmark && !canBenchmark) {
+    return { commands, benchmarkPreflight: "missing-captures-or-unknowns" };
+  }
+  if (options.benchmark) {
+    commands.push({
+      name: "benchmark",
+      args: [
+        "-m",
+        "cardscope_ml",
+        "benchmark",
+        "--manifest",
+        options.manifest,
+        "--asset-root",
+        options.assets,
+        "--checkpoint",
+        resolve(options.output, "model.pt"),
+        "--output",
+        resolve(options.output, "benchmark.json"),
+        "--device",
+        options.device === "auto" ? "cpu" : options.device,
+        "--operation",
+        options.operation,
+      ],
+    });
+  }
+  if (options.exportOnnx) {
+    commands.push({
+      name: "export",
+      args: [
+        "-m",
+        "cardscope_ml",
+        "export",
+        "--manifest",
+        options.manifest,
+        "--asset-root",
+        options.assets,
+        "--checkpoint",
+        resolve(options.output, "model.pt"),
+        "--output-dir",
+        resolve(options.output, "export"),
+        "--calibration-samples",
+        String(options.calibrationSamples),
+        "--operation",
+        options.operation,
+      ],
+    });
+  }
+  if (options.index) {
+    commands.push({
+      name: "build-index",
+      args: [
+        "-m",
+        "cardscope_ml",
+        "build-index",
+        "--manifest",
+        options.manifest,
+        "--asset-root",
+        options.assets,
+        "--model",
+        resolve(options.output, "export", "model.int8.onnx"),
+        "--output-dir",
+        resolve(options.output, "index"),
+        "--operation",
+        options.operation,
+      ],
+    });
+  }
+  return {
+    commands,
+    benchmarkPreflight: options.benchmark ? "ready" : "not-requested",
+  };
+}
