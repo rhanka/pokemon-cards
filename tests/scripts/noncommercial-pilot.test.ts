@@ -4,6 +4,7 @@ import {
   fusionAssetPath,
   fusionCardKey,
   parseFusionCardsCsv,
+  selectFusionCardsCsv,
   validateFusionImageUrl,
 } from "../../scripts/noncommercial-pilot-lib.js";
 
@@ -35,5 +36,23 @@ describe("TheFusion21 non-commercial pilot intake", () => {
     expect(() => validateFusionImageUrl("https://images.pokemontcg.io/base1/4.png")).toThrow(
       "outside the approved image host",
     );
+  });
+
+  it("keeps valid rows when another source row is malformed and supports stable offsets", () => {
+    const selection = selectFusionCardsCsv(
+      [
+        "id,image_url,caption,name,hp,set_name",
+        "bad,https://example.com/base1/4_hires.png,bad,Bad,1,Base",
+        "base1-1,https://images.pokemontcg.io/base1/1_hires.png,one,One,1,Base",
+        "base1-2,https://images.pokemontcg.io/base1/2_hires.png,two,Two,2,Base",
+      ].join("\n"),
+      { offset: 1, limit: 1 },
+    );
+
+    expect(selection.available).toBe(2);
+    expect(selection.cards.map((card) => card.id)).toEqual(["base1-2"]);
+    expect(selection.rejected).toEqual([
+      expect.objectContaining({ rowNumber: 2, reason: expect.stringContaining("outside the approved") }),
+    ]);
   });
 });

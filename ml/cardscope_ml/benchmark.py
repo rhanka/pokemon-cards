@@ -14,7 +14,7 @@ from .inference import cosine_scores, embed_with_torch
 from .metrics import evaluate_retrieval, top_two_features
 from .model import load_checkpoint
 from .report import build_benchmark_report, write_canonical_json
-from .rights import ImageItem, Operation, load_rights_manifest
+from .rights import ImageItem, Operation, load_rights_manifest, require_training_operation
 from .split import SplitConfig, split_manifest
 
 
@@ -27,13 +27,17 @@ def benchmark(
     target_far: float = 0.005,
     device: str = "cpu",
     batch_size: int = 64,
+    operation: Operation | str = Operation.TRAIN,
 ) -> dict[str, Any]:
+    training_operation = require_training_operation(operation)
     manifest = load_rights_manifest(manifest_path)
-    manifest.assert_allowed(Operation.TRAIN)
+    manifest.assert_allowed(training_operation)
     manifest.verify_assets(asset_root)
     model, checkpoint = load_checkpoint(str(checkpoint_path), device=device)
     if checkpoint["manifest_fingerprint"] != manifest.fingerprint:
         raise ValueError("checkpoint and rights manifest fingerprints differ")
+    if checkpoint.get("training_rights_operation", Operation.TRAIN.value) != training_operation.value:
+        raise ValueError("checkpoint and requested training rights operations differ")
     seed = int(checkpoint["seed"])
     partitions = split_manifest(manifest, SplitConfig(seed=seed))
     if checkpoint["split_fingerprint"] != partitions.fingerprint:
@@ -99,6 +103,7 @@ def benchmark(
         device_benchmarks=[latencies],
     )
     report["calibration_model"] = calibrator.to_dict()
+    report["training_rights_operation"] = training_operation.value
     # The public schema intentionally excludes fit coefficients. Keep the auditable sidecar separate.
     calibration_sidecar = report.pop("calibration_model")
     write_canonical_json(output_path, report)

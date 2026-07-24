@@ -61,6 +61,48 @@ sample key, and can simulate perspective, glare, sleeve tint/reflection, blur, s
 shift, JPEG compression, and occlusion. Synthetic variants are generated in memory, so no derived
 artwork is written by default.
 
+## Collector and local model builder
+
+The application runtime remains TypeScript/Svelte. Python is used only as an
+offline training tool; it is never started by the API or deployed to Kubernetes.
+The repository includes a bounded TypeScript collector for the declared CSV and
+its approved image CDN. It validates every redirect, byte budget, PNG header,
+pixel count, SHA-256 digest, and records an atomic resume state plus an intake
+report. Data and artifacts stay in ignored `ml/data/` and `ml/artifacts/`
+directories.
+
+Start with a small, resumable batch (the same command safely resumes it):
+
+```bash
+npm run scrape:pokemon-cards -- \
+  --accept-source-terms --limit=64 \
+  --output=ml/data/pokemon-cards-scrape
+```
+
+`--all` is deliberate and requires `--max-total-bytes`; source rows that do not
+meet the fixed URL and identifier contract are recorded in `intake-report.json`
+instead of stopping a valid batch. The generated manifest is an experiment
+record, not a public-release clearance.
+
+Install the heavy training tools locally, then build a local experimental
+checkpoint. Add `--export --index` only when ONNX dependencies are installed:
+
+```bash
+pip install -e 'ml[train,export]'
+npm run build:visual-model -- \
+  --acknowledge-experimental-model \
+  --manifest=ml/data/pokemon-cards-scrape/rights-manifest.json \
+  --assets=ml/data/pokemon-cards-scrape/assets \
+  --epochs=20 --export --index
+```
+
+The builder invokes Python through argument vectors (no shell), first validates
+all asset hashes, writes `build-manifest.json`, and records the rights operation
+in the checkpoint, export, and index. It does not accept a release flag,
+publish an artifact, or deploy anything. A reference-only corpus can produce a
+baseline checkpoint, but `--benchmark` is rejected until the manifest has
+independent camera captures and unknown-card probes.
+
 ## Train, benchmark, export, and index
 
 Install the heavy stack explicitly:

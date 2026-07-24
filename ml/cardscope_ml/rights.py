@@ -75,6 +75,26 @@ class Operation(str, Enum):
     PUBLISH_ASSETS = "publish-assets"
 
 
+TRAINING_OPERATIONS = frozenset(
+    {Operation.TRAIN, Operation.TRAIN_NONCOMMERCIAL_EXPERIMENT}
+)
+
+
+def require_training_operation(operation: Operation | str) -> Operation:
+    """Return one of the two operations that may create local model artifacts."""
+
+    try:
+        selected = operation if isinstance(operation, Operation) else Operation(operation)
+    except ValueError as exc:
+        raise ValueError(f"unsupported training operation: {operation!r}") from exc
+    if selected not in TRAINING_OPERATIONS:
+        raise ValueError(
+            "model building requires 'train' or 'train-noncommercial-experiment', "
+            f"not {selected.value!r}"
+        )
+    return selected
+
+
 @dataclass(frozen=True, slots=True)
 class SourceRights:
     source_id: str

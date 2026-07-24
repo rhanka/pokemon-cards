@@ -16,7 +16,7 @@ from .errors import DependencyUnavailableError, ManifestError
 from .hard_negatives import batch_hard_triplet_loss
 from .model import ARCHITECTURE, EMBEDDING_DIMENSION, INPUT_SIZE, build_model
 from .report import write_canonical_json
-from .rights import Operation, load_rights_manifest
+from .rights import Operation, load_rights_manifest, require_training_operation
 from .split import SplitConfig, split_manifest
 
 
@@ -39,11 +39,13 @@ def train(
     asset_root: str | Path,
     output_dir: str | Path,
     config: TrainingConfig = TrainingConfig(),
+    operation: Operation | str = Operation.TRAIN,
 ) -> dict[str, Any]:
     torch = _torch()
     _validate_config(config)
+    training_operation = require_training_operation(operation)
     manifest = load_rights_manifest(manifest_path)
-    manifest.assert_allowed(Operation.TRAIN)
+    manifest.assert_allowed(training_operation)
     manifest.verify_assets(asset_root, roles={"reference", "capture"})
     split_config = SplitConfig(seed=config.seed)
     partitions = split_manifest(manifest, split_config)
@@ -113,6 +115,7 @@ def train(
         "split_fingerprint": partitions.fingerprint,
         "seed": config.seed,
         "training_config": asdict(config),
+        "training_rights_operation": training_operation.value,
         "state_dict": model.cpu().state_dict(),
     }
     torch.save(checkpoint, checkpoint_path)
@@ -131,6 +134,8 @@ def train(
         "checkpoint_sha256": checkpoint_hash,
         "manifest_fingerprint": manifest.fingerprint,
         "split_fingerprint": partitions.fingerprint,
+        "training_rights_operation": training_operation.value,
+        "local_only": training_operation is Operation.TRAIN_NONCOMMERCIAL_EXPERIMENT,
         "publish_model_rights_allowed": publish_allowed,
         "weights_origin": "random-initialization-no-pretrained-weights",
         "history": history,

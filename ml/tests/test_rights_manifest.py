@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from cardscope_ml.errors import DataIntegrityError, ManifestError
-from cardscope_ml.rights import Operation, load_rights_manifest, parse_rights_manifest
+from cardscope_ml.rights import (
+    Operation,
+    load_rights_manifest,
+    parse_rights_manifest,
+    require_training_operation,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "rights_manifest.json"
 
@@ -73,6 +78,16 @@ def test_should_allow_a_noncommercial_local_experiment_without_clearing_public_r
         manifest.assert_allowed(Operation.TRAIN)
     with pytest.raises(ManifestError, match="verified upstream rights"):
         manifest.assert_allowed(Operation.PUBLISH_MODEL_NONCOMMERCIAL)
+
+
+def test_should_only_allow_explicit_training_operations_for_model_building() -> None:
+    assert require_training_operation("train") is Operation.TRAIN
+    assert (
+        require_training_operation("train-noncommercial-experiment")
+        is Operation.TRAIN_NONCOMMERCIAL_EXPERIMENT
+    )
+    with pytest.raises(ValueError, match="model building requires"):
+        require_training_operation(Operation.PUBLISH_MODEL)
 
 
 def test_should_verify_content_hash_before_reading_asset(tmp_path: Path) -> None:

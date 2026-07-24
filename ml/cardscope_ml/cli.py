@@ -10,7 +10,10 @@ from typing import Sequence
 
 from .dry_run import run_dry_run
 from .errors import CardscopeMLError
-from .rights import Operation, load_rights_manifest
+from .rights import TRAINING_OPERATIONS, Operation, load_rights_manifest
+
+
+TRAINING_OPERATION_CHOICES = [operation.value for operation in sorted(TRAINING_OPERATIONS)]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -44,6 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--triplet-margin", type=float, default=0.2)
     train.add_argument("--workers", type=int, default=0)
     train.add_argument("--device", default="auto")
+    train.add_argument("--operation", choices=TRAINING_OPERATION_CHOICES, default=Operation.TRAIN.value)
 
     benchmark = subparsers.add_parser("benchmark", help="evaluate UID-separated held-out captures")
     benchmark.add_argument("--manifest", required=True)
@@ -53,6 +57,9 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--target-far", type=float, default=0.005)
     benchmark.add_argument("--device", default="cpu")
     benchmark.add_argument("--batch-size", type=int, default=64)
+    benchmark.add_argument(
+        "--operation", choices=TRAINING_OPERATION_CHOICES, default=Operation.TRAIN.value
+    )
 
     export = subparsers.add_parser("export", help="export float ONNX and static QDQ INT8")
     export.add_argument("--manifest", required=True)
@@ -61,6 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--output-dir", required=True)
     export.add_argument("--calibration-samples", type=int, default=128)
     export.add_argument("--release", action="store_true")
+    export.add_argument("--operation", choices=TRAINING_OPERATION_CHOICES, default=Operation.TRAIN.value)
 
     index = subparsers.add_parser("build-index", help="build the image-free INT8 reference index")
     index.add_argument("--manifest", required=True)
@@ -68,6 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     index.add_argument("--model", required=True)
     index.add_argument("--output-dir", required=True)
     index.add_argument("--release", action="store_true")
+    index.add_argument("--operation", choices=TRAINING_OPERATION_CHOICES, default=Operation.TRAIN.value)
     return parser
 
 
@@ -114,6 +123,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     workers=args.workers,
                     device=args.device,
                 ),
+                operation=args.operation,
             )
         elif args.command == "benchmark":
             from .benchmark import benchmark
@@ -126,6 +136,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 target_far=args.target_far,
                 device=args.device,
                 batch_size=args.batch_size,
+                operation=args.operation,
             )
         elif args.command == "export":
             from .export import export_onnx_int8
@@ -137,6 +148,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_dir=args.output_dir,
                 calibration_samples=args.calibration_samples,
                 release=args.release,
+                operation=args.operation,
             )
         elif args.command == "build-index":
             from .index import build_reference_index
@@ -147,6 +159,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 model_path=args.model,
                 output_dir=args.output_dir,
                 release=args.release,
+                operation=args.operation,
             )
         else:  # pragma: no cover - argparse prevents this branch
             parser.error(f"unknown command {args.command!r}")
