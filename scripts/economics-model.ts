@@ -25,13 +25,7 @@ export interface ScenarioAssumptions {
 export interface EconomicsInputs {
   accounts: number;
   cardsPerAccount: number;
-  cloudConversionRate: number;
   years: number;
-  passPriceUsd: number;
-  maximumMarkupRate: number;
-  processorFixedFeeUsd: number;
-  processorVariableRate: number;
-  infrastructureBudgetPerPaidPassUsd: number;
   cpuSecondsPerScan: number;
   cpuRequestMcpu: number;
   cpuLimitMcpu: number;
@@ -82,21 +76,15 @@ export interface ScenarioProjection {
   requestUtilizationRate: number;
   limitUtilizationRate: number;
   peakExceedsCpuLimit: boolean;
-  paidStorage: StorageProjection;
   allAccountStorage: StorageProjection;
   allocatedComputeCostUsd: number;
-  remainingInfrastructureBudgetUsd: number;
-  maximumBlendedStorageUsdPerGiBMonth: number;
 }
 
-export interface EconomicsProjection {
-  paidAccounts: number;
-  revenueUsd: number;
-  processorCostUsd: number;
-  completeCostAtMarkupCeilingUsd: number;
-  marginAtMarkupCeilingUsd: number;
-  infrastructureBudgetUsd: number;
-  remainingCompleteCostAfterPaymentsUsd: number;
+export interface SustainabilityProjection {
+  serviceModel: "free-noncommercial";
+  checkoutEnabled: false;
+  sharedNodeFiveYearCostUsd: number;
+  requestedCpuFiveYearAttributionUsd: number;
 }
 
 export interface OnboardingProjection {
@@ -115,7 +103,7 @@ export interface OnboardingProjection {
 
 export interface EconomicsReport {
   inputs: EconomicsInputs;
-  economics: EconomicsProjection;
+  sustainability: SustainabilityProjection;
   onboarding: OnboardingProjection;
   scenarios: ScenarioProjection[];
 }
@@ -123,13 +111,7 @@ export interface EconomicsReport {
 export const DEFAULT_ECONOMICS_INPUTS: Readonly<EconomicsInputs> = {
   accounts: 1_000,
   cardsPerAccount: 1_000,
-  cloudConversionRate: 0.3,
   years: 5,
-  passPriceUsd: 4.99,
-  maximumMarkupRate: 0.5,
-  processorFixedFeeUsd: 0.3,
-  processorVariableRate: 0.029,
-  infrastructureBudgetPerPaidPassUsd: 0.6,
   cpuSecondsPerScan: 3.3,
   cpuRequestMcpu: 20,
   cpuLimitMcpu: 300,
@@ -200,19 +182,11 @@ function requirePositive(name: string, value: number): void {
   }
 }
 
-function requireRate(name: string, value: number, allowOne = true): void {
-  const maximum = allowOne ? 1 : Number.POSITIVE_INFINITY;
-  if (!Number.isFinite(value) || value < 0 || value > maximum) {
-    throw new Error(`${name} must be between 0 and ${maximum}`);
-  }
-}
-
 function validateInputs(inputs: EconomicsInputs): void {
   for (const [name, value] of [
     ["accounts", inputs.accounts],
     ["cardsPerAccount", inputs.cardsPerAccount],
     ["years", inputs.years],
-    ["passPriceUsd", inputs.passPriceUsd],
     ["cpuSecondsPerScan", inputs.cpuSecondsPerScan],
     ["cpuRequestMcpu", inputs.cpuRequestMcpu],
     ["cpuLimitMcpu", inputs.cpuLimitMcpu],
@@ -244,9 +218,6 @@ function validateInputs(inputs: EconomicsInputs): void {
       "sharedCatalogueAndPriceBytes must be a non-negative safe integer",
     );
   }
-  requireRate("cloudConversionRate", inputs.cloudConversionRate);
-  requireRate("processorVariableRate", inputs.processorVariableRate);
-  requireRate("maximumMarkupRate", inputs.maximumMarkupRate, false);
   if (inputs.cpuRequestMcpu > inputs.cpuLimitMcpu) {
     throw new Error("cpuRequestMcpu must not exceed cpuLimitMcpu");
   }
@@ -283,28 +254,21 @@ function storageProjection(
   };
 }
 
-function economicsProjection(
+function sustainabilityProjection(
   inputs: EconomicsInputs,
-  paidAccounts: number,
-): EconomicsProjection {
-  const revenueUsd = paidAccounts * inputs.passPriceUsd;
-  const processorCostUsd =
-    paidAccounts *
-    (inputs.processorFixedFeeUsd +
-      inputs.passPriceUsd * inputs.processorVariableRate);
-  const completeCostAtMarkupCeilingUsd =
-    revenueUsd / (1 + inputs.maximumMarkupRate);
-
+): SustainabilityProjection {
+  const sharedNodeFiveYearCostUsd =
+    inputs.sharedNodeMonthlyEur *
+    inputs.planningEurToUsd *
+    inputs.years *
+    MONTHS_PER_YEAR;
   return {
-    paidAccounts,
-    revenueUsd,
-    processorCostUsd,
-    completeCostAtMarkupCeilingUsd,
-    marginAtMarkupCeilingUsd: revenueUsd - completeCostAtMarkupCeilingUsd,
-    infrastructureBudgetUsd:
-      paidAccounts * inputs.infrastructureBudgetPerPaidPassUsd,
-    remainingCompleteCostAfterPaymentsUsd:
-      completeCostAtMarkupCeilingUsd - processorCostUsd,
+    serviceModel: "free-noncommercial",
+    checkoutEnabled: false,
+    sharedNodeFiveYearCostUsd,
+    requestedCpuFiveYearAttributionUsd:
+      sharedNodeFiveYearCostUsd *
+      (inputs.cpuRequestMcpu / inputs.nodeAllocatableMcpu),
   };
 }
 
@@ -318,7 +282,6 @@ function globalRefreshesPerDay(scenario: ScenarioAssumptions): number {
 
 function scenarioProjection(
   inputs: EconomicsInputs,
-  economics: EconomicsProjection,
   scenario: ScenarioAssumptions,
 ): ScenarioProjection {
   const secondsPerMonth = DAYS_PER_MONTH * SECONDS_PER_DAY;
@@ -344,11 +307,6 @@ function scenarioProjection(
   const averageRecognitionMcpu =
     (monthlyRecognitionCpuSeconds / secondsPerMonth) * 1_000;
   const peakRecognitionMcpu = averageRecognitionMcpu * scenario.peakFactor;
-  const paidStorage = storageProjection(
-    inputs,
-    economics.paidAccounts * inputs.cardsPerAccount,
-    scenario.annualHoldingMutationRate,
-  );
   const allAccountStorage = storageProjection(
     inputs,
     inputs.accounts * inputs.cardsPerAccount,
@@ -361,13 +319,6 @@ function scenarioProjection(
     (allocatedMcpu / inputs.nodeAllocatableMcpu) *
     inputs.years *
     MONTHS_PER_YEAR;
-  const remainingInfrastructureBudgetUsd = Math.max(
-    0,
-    economics.infrastructureBudgetUsd - allocatedComputeCostUsd,
-  );
-  const storageGiBMonths =
-    allAccountStorage.totalWithBackupsGiB * inputs.years * MONTHS_PER_YEAR;
-
   return {
     id: scenario.id,
     label: scenario.label,
@@ -394,14 +345,8 @@ function scenarioProjection(
     requestUtilizationRate: averageRecognitionMcpu / inputs.cpuRequestMcpu,
     limitUtilizationRate: averageRecognitionMcpu / inputs.cpuLimitMcpu,
     peakExceedsCpuLimit: peakRecognitionMcpu > inputs.cpuLimitMcpu,
-    paidStorage,
     allAccountStorage,
     allocatedComputeCostUsd,
-    remainingInfrastructureBudgetUsd,
-    maximumBlendedStorageUsdPerGiBMonth:
-      storageGiBMonths > 0
-        ? remainingInfrastructureBudgetUsd / storageGiBMonths
-        : 0,
   };
 }
 
@@ -438,15 +383,13 @@ export function simulateEconomics(
 ): EconomicsReport {
   const inputs = { ...DEFAULT_ECONOMICS_INPUTS, ...overrides };
   validateInputs(inputs);
-  const paidAccounts = Math.round(inputs.accounts * inputs.cloudConversionRate);
-  const economics = economicsProjection(inputs, paidAccounts);
 
   return {
     inputs,
-    economics,
+    sustainability: sustainabilityProjection(inputs),
     onboarding: onboardingProjection(inputs),
     scenarios: ECONOMICS_SCENARIOS.map((scenario) =>
-      scenarioProjection(inputs, economics, scenario),
+      scenarioProjection(inputs, scenario),
     ),
   };
 }

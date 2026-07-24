@@ -11,15 +11,18 @@ datée et sourcée. Le cache local n'est jamais présenté comme une sauvegarde.
 ## Direction choisie
 
 - Caméra guidée, recadrage et réencodage JPEG local avant envoi.
-- OCR Tesseract.js dans le service TypeScript Kubernetes ; petit modèle INT8 serveur uniquement après validation du corpus, des droits et du benchmark.
+- Retrieval visuel dans un Web Worker Svelte/TypeScript avec modèle ONNX INT8;
+  l'API TypeScript cherche un embedding dans un index compact seulement après
+  validation du corpus, des droits et du benchmark.
 - Top candidats et abstention ; aucune invention lorsque la confiance est faible.
 - Langue de carte recherchée automatiquement en anglais et français ; impression
   confirmée par la personne, puis finition et état renseignés.
-- Photos envoyées en TLS pour le scan, traitées uniquement en mémoire et supprimées avant réponse ; aucune conservation ni entraînement.
+- Photo traitée localement pour le scan; seul l'embedding borné va à l'API.
+  Aucune conservation ni entraînement de photo utilisateur.
 - TCGdex comme catalogue primaire ; Pokémon TCG API comme source secondaire et de comparaison.
 - Aucun scraping de marketplace sans contrat explicite.
-- Compte central, cache hors ligne et export inclus ; forfait 4,99 USD pour
-  cinq ans comme hypothèse de lancement, toujours borné au coût +50%.
+- Compte central, cache hors ligne et export inclus gratuitement pendant le
+  pilote non commercial; aucune publicité ni objectif de marge.
 - Auth OIDC Sentropic en public client PKCE ; `OIDC_REQUIRED=false` subsiste
   jusqu'à preuve du client/resource/callback/logout, disposition explicite des
   identités legacy et validation de la sauvegarde/restauration hors PVC.
@@ -31,12 +34,12 @@ datée et sourcée. Le cache local n'est jamais présenté comme une sauvegarde.
 
 ## MVP versus évolution
 
-Le MVP livre immédiatement le cadrage guidé, l'OCR serveur, les candidats
-catalogue bilingues, la recherche manuelle, l'enrôlement de compte, le cache
+Le MVP livre immédiatement le cadrage guidé, la recherche manuelle, le contrat
+de retrieval visuel, les candidats catalogue bilingues, l'enrôlement de compte, le cache
 IndexedDB, la synchronisation automatique centrale, la valeur sourcée
 lorsqu'une source de prix est autorisée, l'import/export et le protocole de
 sync compact avec génération anti-résurrection. Il livre aussi le pipeline
 reproductible de génération de données, entraînement, benchmark et export du
 petit modèle.
 
-Le passage du modèle en chemin principal est conditionné par le benchmark et les droits sur le corpus/poids. Cette prudence ne bloque pas l'application : elle fonctionne avec OCR serveur + candidats en attendant un checkpoint validé.
+Le passage du modèle en chemin principal est conditionné par le benchmark et les droits sur le corpus/poids. Cette prudence ne bloque pas l'application : la recherche catalogue manuelle reste disponible tant que le modèle n'est pas validé.

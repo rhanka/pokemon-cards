@@ -19,7 +19,9 @@ data:
   MARKET_QUOTES_ENABLED: "false"
   CATALOG_MAX_RESPONSE_BYTES: "2097152"
   CATALOG_CACHE_MAX_BYTES: "268435456"
-  RECOGNITION_ENABLED: "true"
+  # OCR is intentionally disabled. Visual retrieval is enabled only with a
+  # separately cleared browser model/index release.
+  RECOGNITION_ENABLED: "false"
   RECOGNITION_DATA_PATH: "/app/recognition-data"
   RECOGNITION_MAX_IMAGE_BYTES: "2097152"
   RECOGNITION_MAX_PIXELS: "4000000"

@@ -5,19 +5,25 @@
 ```text
 camera/file
   -> guided crop + bounded JPEG re-encoding in the browser
-  -> TLS upload to POST /api/recognition/cards
-  -> JPEG/pixel validation + normalization with Sharp
-  -> one Tesseract.js worker for number/name evidence
-  -> parallel fail-closed English/French TCGdex metadata search
-  -> calibrated top candidates or abstention
+  -> ONNX INT8 encoder in a browser Web Worker (WASM/SIMD)
+  -> normalized 128D embedding to a TypeScript top-five lookup endpoint
+  -> calibrated top candidates or abstention (no automatic add)
   -> human confirmation of the printing, finish, and condition
   -> provisional anonymous or account-scoped offline event
   -> automatic idempotent central sync
 ```
 
-The source photo is sent to the API only for this transient recognition call. The browser re-encodes it to strip EXIF/GPS; the API never writes it to disk, SQLite, logs, analytics, or a training corpus. It clears application buffers after processing, returns no raw OCR text, and marks every response `no-store`. The server derives a bounded name/collector-number query and sends only that query—not the photo or raw OCR—to TCGdex over HTTPS to obtain candidates. TCGdex is an external processor that may retain request logs under its own policy. One worker and a no-queue busy response bound CPU and memory. No paid Vision API or Python runtime is involved.
+The browser re-encodes the source photo to strip EXIF/GPS and keeps it on the
+device. The API receives only a bounded normalized embedding; it never writes a
+photo, raw model signal, or IP address to disk, SQLite, logs, analytics, or a
+training corpus. It returns a calibrated top-five/abstention result with
+`Cache-Control: no-store`. No paid Vision API or Python runtime is involved.
 
-The MVP identifies printed name and collector number; it does not compare artwork or infer authenticity, finish, or condition. An ONNX retrieval model remains a future server engine and cannot be activated until both a commercially valid corpus/weight and a named benchmark pass.
+The product compares the card visually; it does not infer authenticity, finish,
+or condition. A visual model cannot be activated until its corpus and derived
+artefacts have permitted public use, and a named benchmark passes. Until then,
+manual catalogue search is the product fallback; the legacy OCR endpoint is
+disabled in Kubernetes.
 
 ## Runtime
 
@@ -36,7 +42,7 @@ The MVP identifies printed name and collector number; it does not compare artwor
   and 4 GiB Scaleway `sbs-default` PVC; a future OVH overlay must provide its
   own validated mapping.
 
-There is no Python service or Python runtime in the application image. The optional `ml/` Python package is an offline, rights-gated training/evaluation tool only and is excluded from the OCI context. Any future released artifact is consumed by the Node recognizer. Scanning, collection, API, authentication, and sync all run in TypeScript/Svelte.
+There is no Python service or Python runtime in the application image. The optional `ml/` Python package is an offline, rights-gated training/evaluation tool only and is excluded from the OCI context. Any future released artifact is consumed by the Svelte browser Worker and queried by the TypeScript API. Scanning, collection, API, authentication, and sync all run in TypeScript/Svelte.
 
 SQLite is intentionally a first-tier cost choice, not a 100,000-user claim.
 Migrate to PostgreSQL when any of these are observed: more than one API replica
@@ -83,9 +89,9 @@ Production prerequisites remain owner-controlled:
 6. immediate scheduler recheck for the explicit 20m request; no node expansion is authorised;
 7. namespace-scoped CI kubeconfig;
 8. approved off-PVC backup/IAM contract and a successful isolated restore rehearsal; see [backup and restore](backup-restore.md).
-9. distributed sync throttling and a global storage budget. Billing is a
-   commercial gate, not a different data architecture: every enrolled account
-   is included in capacity calculations.
+9. distributed sync throttling and a global storage budget. Every enrolled
+   account is included in capacity calculations; no payment state changes the
+   storage authority.
 
 The scan-only workload may run with `OIDC_REQUIRED=false`; account enrollment
 and central sync may not. Enabling identity-backed storage requires every

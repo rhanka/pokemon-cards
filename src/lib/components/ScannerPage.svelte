@@ -488,30 +488,38 @@
       </div>
     {/if}
 
-    <Card class="scan-card">
-      <div class="scan-illustration" aria-hidden="true">
-        <div class="card-back"><span class="scan-lens"></span></div>
-        <div class="focus-corners">
-          <span></span><span></span><span></span><span></span>
+    {#if config.recognition.enabled}
+      <Card class="scan-card">
+        <div class="scan-illustration" aria-hidden="true">
+          <div class="card-back"><span class="scan-lens"></span></div>
+          <div class="focus-corners">
+            <span></span><span></span><span></span><span></span>
+          </div>
         </div>
-      </div>
-      <div class="scan-actions">
-        <Button size="lg" class="scan-main" onclick={startCamera}>
-          <Icon name="camera" />
-          {translate(locale, "scanner.camera")}
-        </Button>
-        <label class="button secondary">
-          <Icon name="image" />
-          {translate(locale, "scanner.photo")}
-          <input
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            capture="environment"
-            onchange={chooseFile}
-          />
-        </label>
-      </div>
-    </Card>
+        <div class="scan-actions">
+          <Button size="lg" class="scan-main" onclick={startCamera}>
+            <Icon name="camera" />
+            {translate(locale, "scanner.camera")}
+          </Button>
+          <label class="button secondary">
+            <Icon name="image" />
+            {translate(locale, "scanner.photo")}
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              capture="environment"
+              onchange={chooseFile}
+            />
+          </label>
+        </div>
+      </Card>
+    {:else}
+      <Card class="scan-card">
+        <p class="scan-unavailable">
+          {translate(locale, "scanner.visualUnavailable")}
+        </p>
+      </Card>
+    {/if}
 
     <form class="manual-search" onsubmit={manualSearch}>
       <Input
