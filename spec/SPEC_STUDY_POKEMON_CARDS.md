@@ -1,18 +1,20 @@
 # Étude — reconnaissance et valeur des cartes Pokémon
 
-Date de décision : 2026-07-22.
+Date de décision initiale : 2026-07-22. Remplacée pour la reconnaissance et
+l'offre par `SPEC_STUDY_VISUAL_RECOGNITION.md` le 2026-07-24.
 
 ## Question
 
-Comment livrer une application mobile de reconnaissance, collection et valorisation utile pour environ 1 000 cartes par personne, sans publicité, rentable dès la première cohorte et sans dépendre d'une API Vision facturée au scan ?
+Comment livrer une application mobile de reconnaissance, collection et
+valorisation utile pour environ 1 000 cartes par personne, sans publicité,
+sans dépendre d'une API Vision facturée au scan ?
 
 ## Contraintes données par le propriétaire
 
 - SPA/PWA Svelte acceptable ; expérience d'abord mobile.
-- Gratuit ou prix limité au coût complet majoré de 50 %.
-- Cible idéale proche de 1 USD/an ; un forfait est préférable.
+- Pilote gratuit et non commercial, sans objectif de marge.
 - Historique conservé pendant la durée libératoire, prise ici comme cinq ans.
-- Zéro publicité ; 100 000 comptes et environ 50 000 USD de marge constituent la cible.
+- Zéro publicité; la capacité et le coût sont suivis sans revenu utilisateur.
 - Auth Sentropic et déploiement sur l'infrastructure Kubernetes déjà réellement disponible.
 - Le serveur authentifié est l'autorité de chaque compte enrôlé ; IndexedDB
   sert uniquement de cache/outbox hors ligne.

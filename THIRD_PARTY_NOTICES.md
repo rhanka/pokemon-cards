@@ -33,3 +33,15 @@ This notice covers TCGdex's database contribution. It does not grant rights to
 Pokémon artwork, logos, trademarks, or third-party marketplace price feeds;
 CardScope controls those data classes with separate disabled-by-default
 switches.
+
+## TheFusion21/PokemonCards — local experiment only
+
+The local visual-retrieval intake may read the
+[TheFusion21/PokemonCards](https://huggingface.co/datasets/TheFusion21/PokemonCards)
+dataset card, which declares
+[CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/). The dataset's
+CSV points to external `images.pokemontcg.io` URLs. No image, weight, index, or
+other derived artefact from this intake is committed or distributed by this
+repository. Its upstream Pokémon artwork authority has not been independently
+verified; the manifest therefore blocks public model publication and any
+commercial use.

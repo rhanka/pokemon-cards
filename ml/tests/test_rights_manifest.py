@@ -19,6 +19,8 @@ def test_should_accept_complete_explicit_provenance() -> None:
 
     manifest.assert_allowed(Operation.TRAIN)
     manifest.assert_allowed(Operation.PUBLISH_MODEL)
+    manifest.assert_allowed(Operation.TRAIN_NONCOMMERCIAL_EXPERIMENT)
+    manifest.assert_allowed(Operation.PUBLISH_MODEL_NONCOMMERCIAL)
 
     assert manifest.dataset_id == "cardscope-fixture-v1"
     assert len(manifest.fingerprint) == 64
@@ -56,6 +58,21 @@ def test_should_refuse_model_publication_when_any_used_source_disallows_it() -> 
     manifest.assert_allowed(Operation.TRAIN)
     with pytest.raises(ManifestError, match="model redistribution"):
         manifest.assert_allowed(Operation.PUBLISH_MODEL)
+
+
+def test_should_allow_a_noncommercial_local_experiment_without_clearing_public_release() -> None:
+    payload = fixture_payload()
+    source = payload["sources"][0]
+    source["commercial_use_allowed"] = False
+    source["model_redistribution_allowed"] = False
+    source["upstream_rights_verified"] = False
+    manifest = parse_rights_manifest(payload)
+
+    manifest.assert_allowed(Operation.TRAIN_NONCOMMERCIAL_EXPERIMENT)
+    with pytest.raises(ManifestError, match="commercial use"):
+        manifest.assert_allowed(Operation.TRAIN)
+    with pytest.raises(ManifestError, match="verified upstream rights"):
+        manifest.assert_allowed(Operation.PUBLISH_MODEL_NONCOMMERCIAL)
 
 
 def test_should_verify_content_hash_before_reading_asset(tmp_path: Path) -> None:

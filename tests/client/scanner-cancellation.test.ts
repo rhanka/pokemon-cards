@@ -51,6 +51,21 @@ afterEach(() => {
 });
 
 describe("scanner server-recognition cancellation", () => {
+  it("should offer manual catalogue search rather than a legacy scan when visual recognition is disabled", () => {
+    render(ScannerPage, {
+      locale: "en",
+      config: { ...config, recognition: { ...config.recognition, enabled: false } },
+      online: true,
+      valuationPreference: { market: "tcgplayer", currency: "USD" },
+      onAdd: vi.fn(),
+    });
+
+    expect(screen.queryByRole("button", { name: "Use camera" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Choose photo")).not.toBeInTheDocument();
+    expect(screen.getByText(/Visual recognition is being verified/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Search" })).toBeEnabled();
+  });
+
   it("should abort the upload and ignore a late recognition result", async () => {
     let resolveRecognition:
       ((value: ServerRecognitionResult) => void) | undefined;
@@ -81,7 +96,7 @@ describe("scanner server-recognition cancellation", () => {
       new File(["image"], "card.jpg", { type: "image/jpeg" }),
     );
     expect(
-      await screen.findByText("Reading the card securely"),
+      await screen.findByText("Comparing the card securely"),
     ).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
