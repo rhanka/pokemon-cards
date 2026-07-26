@@ -92,6 +92,7 @@ async function main(): Promise<void> {
       .update(rawManifest)
       .digest("hex"),
     assets: options.assets,
+    resume_checkpoint: options.resumeCheckpoint,
     role_counts: counts,
     benchmark_preflight: plan.benchmarkPreflight,
     assessment: {

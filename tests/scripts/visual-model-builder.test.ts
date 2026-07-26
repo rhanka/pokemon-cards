@@ -14,6 +14,7 @@ describe("visual model builder", () => {
         "--assets=ml/data/demo/assets",
         "--output=/tmp/cardscope-model",
         "--workers=4",
+        "--resume-checkpoint=ml/artifacts/previous/model.last.pt",
         "--export",
         "--index",
       ],
@@ -23,6 +24,9 @@ describe("visual model builder", () => {
 
     expect(options.operation).toBe("train-noncommercial-experiment");
     expect(options.workers).toBe(4);
+    expect(options.resumeCheckpoint).toBe(
+      "/repo/ml/artifacts/previous/model.last.pt",
+    );
     expect(plan.benchmarkPreflight).toBe("not-requested");
     expect(plan.commands.map((command) => command.name)).toEqual([
       "validate-manifest",
@@ -35,6 +39,7 @@ describe("visual model builder", () => {
       "--release",
     );
     expect(plan.commands[1]!.args).toContain("train-noncommercial-experiment");
+    expect(plan.commands[1]!.args).toContain("--resume-checkpoint");
   });
 
   it("rejects an index without an export and preflights a reference-only benchmark", () => {

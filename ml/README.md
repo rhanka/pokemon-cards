@@ -111,6 +111,9 @@ selected retrieval model. Static INT8 is exported as a fidelity diagnostic only;
 it is not selected automatically. When `--index` is selected, the builder also reloads the ONNX model and verifies
 that every canonical reference retrieves itself from the generated index. This
 is only an artifact-integrity smoke test, not a camera-recognition benchmark.
+An interrupted local run resumes deterministically with
+`--resume-checkpoint=<output>/model.last.pt` and the same manifest, seed, and
+epoch target; the builder rejects a checkpoint from a different split.
 
 ## Train, benchmark, export, and index
 
