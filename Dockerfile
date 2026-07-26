@@ -24,7 +24,6 @@ RUN npm ci --omit=dev --ignore-scripts \
     && chown -R node:node /app /data
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/dist-server ./dist-server
-COPY --from=build --chown=node:node /app/recognition-data ./recognition-data
 
 USER node
 EXPOSE 3000

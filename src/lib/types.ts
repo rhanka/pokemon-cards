@@ -1,5 +1,3 @@
-import type { ServerRecognitionResult as ApiServerRecognitionResult } from "../../shared/types";
-
 export type Locale = "en" | "fr";
 
 export type AppView = "scanner" | "collection" | "insights" | "settings";
@@ -68,14 +66,7 @@ export type CatalogCard = {
   };
 };
 
-export type { OcrLine, ParsedCardText } from "../../shared/types";
-
-export type ServerRecognitionResult = Omit<
-  ApiServerRecognitionResult,
-  "cards"
-> & {
-  cards: CatalogCard[];
-};
+export type { ParsedCardText, TextLine } from "../../shared/types";
 
 export type VisualMatch = {
   cardId: string;
@@ -106,8 +97,7 @@ export type RuntimeConfig = {
   appName: string;
   recognition: {
     enabled: boolean;
-    processing: "server";
-    maxImageBytes: number;
+    processing: "browser-vector";
   };
   auth: {
     enabled: boolean;

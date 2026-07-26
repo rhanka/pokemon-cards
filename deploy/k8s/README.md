@@ -14,7 +14,7 @@ after that cluster's portable storage mapping is active.
 
 The `not-published` image tag in Git is a fail-closed render placeholder and is never pushed. Deployment automation accepts only a 40-character commit that is an ancestor of `origin/main`, resolves its `sha-<commit>` package, verifies the OCI revision label and GitHub build-provenance attestation, then replaces the placeholder with the registry digest. Before applying, it validates the namespace-scoped context, confirms the credential cannot create cluster-scoped RBAC, checks a fresh owner capacity approval and quota headroom, and performs a server-side dry-run.
 
-The protected GitHub `production` environment owns both `KUBE_CONFIG_DATA` and `CAPACITY_APPROVED_UNTIL` if CI deployment is later enabled. The current POC uses an owner-operated apply path instead. Immediately before either path, the operator must confirm at least the workload's explicit 20m CPU and 256Mi memory requests; the CPU request is intentionally small while the 300m limit permits short OCR bursts.
+The protected GitHub `production` environment owns both `KUBE_CONFIG_DATA` and `CAPACITY_APPROVED_UNTIL` if CI deployment is later enabled. The current POC uses an owner-operated apply path instead. Immediately before either path, the operator must confirm at least the workload's explicit 20m CPU and 256Mi memory requests; the CPU request is intentionally small while the 300m limit permits ordinary catalogue and synchronization bursts.
 
 The workload release requires these owner-controlled gates:
 
@@ -48,7 +48,8 @@ restore rehearsal are required before making a recoverable-backup or
 commercial five-year-retention claim; they do not block publishing the
 fail-closed scan service while `OIDC_REQUIRED=false`.
 
-The checked-in POC enables server recognition and TCGdex catalogue metadata.
+The checked-in POC enables TCGdex catalogue metadata only. Visual recognition
+has no server image-upload fallback until a cleared browser bundle exists.
 Card images, marketplace quotes, and the secondary catalogue stay disabled
 until their separate rights gates pass. `OIDC_REQUIRED=false` is the
 fail-closed scan-only state while either identity or durability evidence is

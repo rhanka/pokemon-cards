@@ -62,36 +62,14 @@ describe("OIDC runtime configuration", () => {
     ).toThrow("CATALOG_CACHE_MAX_BYTES must not exceed 1073741824");
   });
 
-  it("bounds and publishes server recognition only with an authorised catalogue", () => {
-    expect(loadConfig({}).recognition.enabled).toBe(false);
-    expect(
-      toPublicConfig(loadConfig({ RECOGNITION_ENABLED: "true" })).recognition
-        .enabled,
-    ).toBe(false);
-    expect(
-      toPublicConfig(
-        loadConfig({
-          RECOGNITION_ENABLED: "true",
-          TCGDEX_CATALOG_ENABLED: "true",
-        }),
-      ).recognition,
-    ).toMatchObject({
-      enabled: true,
-      processing: "server",
-      maxImageBytes: 2 * 1024 * 1024,
+  it("publishes visual recognition as an unavailable browser-vector capability", () => {
+    expect(toPublicConfig(loadConfig({})).recognition).toEqual({
+      enabled: false,
+      processing: "browser-vector",
     });
     expect(
       toPublicConfig(loadConfig({ MARKET_QUOTES_ENABLED: "true" })).valuation,
     ).toEqual({ marketQuotesEnabled: true });
-    expect(() => loadConfig({ RECOGNITION_MAX_PIXELS: "4000001" })).toThrow(
-      "RECOGNITION_MAX_PIXELS must not exceed 4000000",
-    );
-    expect(() => loadConfig({ RECOGNITION_TIMEOUT_MS: "45001" })).toThrow(
-      "RECOGNITION_TIMEOUT_MS must not exceed 45000",
-    );
-    expect(() =>
-      loadConfig({ RECOGNITION_MAX_CONCURRENT_UPLOADS: "5" }),
-    ).toThrow("RECOGNITION_MAX_CONCURRENT_UPLOADS must not exceed 4");
   });
 
   it("rejects insecure remote OIDC endpoints but permits loopback development", () => {

@@ -1,10 +1,9 @@
 <script lang="ts">
-  /* global HTMLVideoElement, MediaStream, Blob, HTMLElement, navigator, document, Event, HTMLInputElement, URL, console, SubmitEvent, AbortController, AbortSignal, DOMException */
+  /* global HTMLElement, console, SubmitEvent, AbortController, AbortSignal, DOMException */
   import { Button, Card, Input } from "@sentropic/design-system-svelte";
   import { onDestroy, tick } from "svelte";
-  import { getCatalogCard, recognizeCardImage, searchCatalog } from "../api";
+  import { getCatalogCard, searchCatalog } from "../api";
   import type { AddHoldingInput } from "../collection";
-  import { prepareImageForRecognition } from "../image-upload";
   import { formatOptionalMoney, translate, type TranslationKey } from "../i18n";
   import { parseCardText } from "../../../shared/card-text";
   import { decideRecognition, scoreCandidates } from "../scoring";
@@ -16,7 +15,6 @@
     ParsedCardText,
     RecognitionCandidate,
     RecognitionDecision,
-    RuntimeConfig,
     ValuationPreference,
     VisualMatch,
   } from "../types";
@@ -26,13 +24,11 @@
 
   let {
     locale,
-    config,
     online,
     valuationPreference,
     onAdd,
   }: {
     locale: Locale;
-    config: RuntimeConfig;
     online: boolean;
     valuationPreference: ValuationPreference;
     onAdd: (input: AddHoldingInput) => Promise<void>;
@@ -40,10 +36,7 @@
 
   type Stage =
     | "idle"
-    | "camera"
-    | "ocr"
     | "search"
-    | "visual"
     | "hydrate"
     | "results"
     | "confirm"
@@ -51,10 +44,6 @@
     | "error";
 
   let stage = $state<Stage>("idle");
-  let video = $state<HTMLVideoElement>();
-  let stream: MediaStream | null = null;
-  let previewUrl = $state<string>();
-  let progress = $state(0);
   let parsed = $state<ParsedCardText>();
   let decision = $state<RecognitionDecision>();
   let selected = $state<RecognitionCandidate>();
@@ -132,14 +121,12 @@
         ? String(error.code)
         : "";
     if (
-      code === "recognition_busy" ||
-      code === "recognition_upload_busy" ||
-      code === "recognition_rate_limited"
+      code === "catalogue_rate_limited"
     ) {
       return translate(locale, "scanner.busy");
     }
     if (
-      code === "recognition_timeout" ||
+      code === "catalogue_timeout" ||
       (error instanceof DOMException && error.name === "TimeoutError")
     ) {
       return translate(locale, "scanner.timeout");
@@ -148,136 +135,6 @@
       return translate(locale, "scanner.catalogueUnavailable");
     }
     return translate(locale, "scanner.error");
-  }
-
-  function stopCamera(): void {
-    stream?.getTracks().forEach((track) => track.stop());
-    stream = null;
-    if (stage === "camera") stage = "idle";
-  }
-
-  async function startCamera(): Promise<void> {
-    errorMessage = "";
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1280 },
-          height: { ideal: 1920 },
-        },
-      });
-      stage = "camera";
-      await tick();
-      if (!video) throw new Error("Camera preview is unavailable");
-      video.srcObject = stream;
-      await video.play();
-    } catch (error) {
-      errorMessage =
-        error instanceof Error
-          ? error.message
-          : translate(locale, "scanner.error");
-      stage = "error";
-    }
-  }
-
-  async function captureCamera(): Promise<void> {
-    if (!video?.videoWidth || !video.videoHeight) return;
-    const cardRatio = 2.5 / 3.5;
-    let cropHeight = video.videoHeight * 0.86;
-    let cropWidth = cropHeight * cardRatio;
-    if (cropWidth > video.videoWidth * 0.9) {
-      cropWidth = video.videoWidth * 0.9;
-      cropHeight = cropWidth / cardRatio;
-    }
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(cropWidth);
-    canvas.height = Math.round(cropHeight);
-    const context = canvas.getContext("2d");
-    if (!context) return;
-    context.drawImage(
-      video,
-      (video.videoWidth - cropWidth) / 2,
-      (video.videoHeight - cropHeight) / 2,
-      cropWidth,
-      cropHeight,
-      0,
-      0,
-      cropWidth,
-      cropHeight,
-    );
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, "image/jpeg", 0.9),
-    );
-    stopCamera();
-    if (blob) await processImage(blob);
-  }
-
-  async function chooseFile(event: Event): Promise<void> {
-    const input = event.currentTarget as HTMLInputElement;
-    const file = input.files?.[0];
-    input.value = "";
-    if (file) await processImage(file);
-  }
-
-  function replacePreview(blob: Blob): void {
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    previewUrl = URL.createObjectURL(blob);
-  }
-
-  function cancelRecognition(): void {
-    recognitionAttempt += 1;
-    recognitionController?.abort();
-    recognitionController = null;
-    resetResult();
-  }
-
-  async function processImage(blob: Blob): Promise<void> {
-    const attempt = ++recognitionAttempt;
-    recognitionController?.abort();
-    const controller = new AbortController();
-    recognitionController = controller;
-    resetResult(false);
-    stage = "ocr";
-    progress = 0;
-    try {
-      const prepared = await prepareImageForRecognition(blob);
-      if (attempt !== recognitionAttempt || controller.signal.aborted) return;
-      if (prepared.size > config.recognition.maxImageBytes) {
-        throw new Error("Prepared recognition image exceeds the upload limit");
-      }
-      replacePreview(prepared);
-      if (!config.recognition.enabled) {
-        throw new Error("Server recognition is disabled");
-      }
-      const recognition = await recognizeCardImage(
-        prepared,
-        locale,
-        controller.signal,
-      );
-      if (attempt !== recognitionAttempt || controller.signal.aborted) return;
-      progress = 100;
-      const textResult: ParsedCardText = {
-        rawText: "",
-        ...recognition.evidence,
-      };
-      parsed = textResult;
-      await showCandidates(
-        textResult,
-        recognition.cards,
-        recognition.visualMatches.map((match) => ({
-          ...match,
-          provider: "server-model" as const,
-        })),
-      );
-    } catch (error) {
-      if (attempt !== recognitionAttempt || controller.signal.aborted) return;
-      console.error(error);
-      errorMessage = scanFailureMessage(error);
-      stage = "error";
-    } finally {
-      if (recognitionController === controller) recognitionController = null;
-    }
   }
 
   async function findCandidates(
@@ -405,12 +262,10 @@
           ? { amount: parsedCost, currency: costCurrency }
           : undefined,
     });
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    previewUrl = undefined;
     stage = "added";
   }
 
-  function resetResult(clearPreview = true): void {
+  function resetResult(): void {
     decision = undefined;
     selected = undefined;
     parsed = undefined;
@@ -419,8 +274,6 @@
     cost = "";
     costCurrency = "";
     errorMessage = "";
-    if (clearPreview && previewUrl) URL.revokeObjectURL(previewUrl);
-    if (clearPreview) previewUrl = undefined;
     stage = "idle";
   }
 
@@ -428,8 +281,6 @@
     recognitionAttempt += 1;
     recognitionController?.abort();
     recognitionController = null;
-    stopCamera();
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
   });
 </script>
 
@@ -448,32 +299,7 @@
     </div>
   </header>
 
-  {#if stage === "camera"}
-    <div class="camera-shell">
-      <video
-        bind:this={video}
-        autoplay
-        muted
-        playsinline
-        aria-label={translate(locale, "scanner.title")}
-      ></video>
-      <div class="card-guide" aria-hidden="true">
-        <span></span><span></span><span></span><span></span>
-      </div>
-      <div class="camera-actions">
-        <button
-          class="capture-button"
-          onclick={captureCamera}
-          aria-label={translate(locale, "scanner.capture")}
-        >
-          <span></span>
-        </button>
-        <button class="button ghost light" onclick={stopCamera}
-          >{translate(locale, "scanner.stop")}</button
-        >
-      </div>
-    </div>
-  {:else if stage === "idle" || stage === "added" || stage === "error"}
+  {#if stage === "idle" || stage === "added" || stage === "error"}
     {#if stage === "added"}
       <div class="notice success" role="status">
         <Icon name="check" />
@@ -488,38 +314,11 @@
       </div>
     {/if}
 
-    {#if config.recognition.enabled}
-      <Card class="scan-card">
-        <div class="scan-illustration" aria-hidden="true">
-          <div class="card-back"><span class="scan-lens"></span></div>
-          <div class="focus-corners">
-            <span></span><span></span><span></span><span></span>
-          </div>
-        </div>
-        <div class="scan-actions">
-          <Button size="lg" class="scan-main" onclick={startCamera}>
-            <Icon name="camera" />
-            {translate(locale, "scanner.camera")}
-          </Button>
-          <label class="button secondary">
-            <Icon name="image" />
-            {translate(locale, "scanner.photo")}
-            <input
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              capture="environment"
-              onchange={chooseFile}
-            />
-          </label>
-        </div>
-      </Card>
-    {:else}
-      <Card class="scan-card">
-        <p class="scan-unavailable">
-          {translate(locale, "scanner.visualUnavailable")}
-        </p>
-      </Card>
-    {/if}
+    <Card class="scan-card">
+      <p class="scan-unavailable">
+        {translate(locale, "scanner.visualUnavailable")}
+      </p>
+    </Card>
 
     <form class="manual-search" onsubmit={manualSearch}>
       <Input
@@ -535,32 +334,16 @@
         {translate(locale, "scanner.search")}</Button
       >
     </form>
-  {:else if stage === "ocr" || stage === "search" || stage === "visual" || stage === "hydrate"}
+  {:else if stage === "search" || stage === "hydrate"}
     <Card class="processing-card" role="status" aria-live="polite">
-      {#if previewUrl}<img src={previewUrl} alt="" />{/if}
       <div class="processing-copy">
         <span class="spinner" aria-hidden="true"></span>
         <strong>
-          {stage === "ocr"
-            ? translate(locale, "scanner.processing")
-            : stage === "search"
-              ? translate(locale, "scanner.searching")
-              : stage === "hydrate"
-                ? translate(locale, "common.loading")
-                : translate(locale, "scanner.model")}
+          {stage === "search"
+            ? translate(locale, "scanner.searching")
+            : translate(locale, "common.loading")}
         </strong>
-        {#if stage === "ocr"}
-          <div class="progress-track">
-            <span style={`width: ${progress}%`}></span>
-          </div>
-          <small>{progress}%</small>
-          <Button
-            variant="secondary"
-            class="ocr-cancel"
-            onclick={cancelRecognition}
-            >{translate(locale, "common.cancel")}</Button
-          >
-        {:else if parsed?.query}
+        {#if parsed?.query}
           <small>“{parsed.query}”</small>
         {/if}
       </div>
@@ -780,106 +563,6 @@
     background: var(--st-semantic-surface-raised);
     box-shadow: var(--st-component-card-shadow);
   }
-  .scan-illustration {
-    position: relative;
-    display: grid;
-    place-items: center;
-    min-height: 19rem;
-    overflow: hidden;
-    border-radius: 1rem;
-    background: var(--st-semantic-surface-inverse);
-  }
-  .scan-illustration::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border: 1px solid
-      color-mix(in srgb, var(--st-semantic-text-inverse) 16%, transparent);
-    border-radius: inherit;
-  }
-  .card-back {
-    position: relative;
-    display: grid;
-    place-items: center;
-    width: 8.6rem;
-    aspect-ratio: 2.5/3.5;
-    border: 5px solid
-      color-mix(in srgb, var(--st-semantic-text-inverse) 84%, transparent);
-    border-radius: 0.7rem;
-    background: var(--st-semantic-action-primary);
-    box-shadow: var(--st-shadow-floating);
-    transform: rotate(-5deg);
-  }
-  .card-back::after {
-    content: "";
-    position: absolute;
-    inset: 0.45rem;
-    border: 2px solid
-      color-mix(in srgb, var(--st-semantic-text-inverse) 48%, transparent);
-    border-radius: 0.25rem;
-  }
-  .scan-lens {
-    position: relative;
-    z-index: 1;
-    width: 3.1rem;
-    aspect-ratio: 1;
-    border: 0.55rem solid
-      color-mix(in srgb, var(--st-semantic-text-inverse) 92%, transparent);
-    border-radius: 1rem;
-    background: var(--st-semantic-data-category1);
-    box-shadow: var(--st-shadow-medium);
-  }
-  .focus-corners {
-    position: absolute;
-    inset: 1.35rem;
-  }
-  .focus-corners span {
-    position: absolute;
-    width: 2.4rem;
-    height: 2.4rem;
-    border-color: var(--st-semantic-text-inverse);
-    border-style: solid;
-  }
-  .focus-corners span:nth-child(1) {
-    top: 0;
-    left: 0;
-    border-width: 3px 0 0 3px;
-    border-radius: 0.5rem 0 0;
-  }
-  .focus-corners span:nth-child(2) {
-    top: 0;
-    right: 0;
-    border-width: 3px 3px 0 0;
-    border-radius: 0 0.5rem 0 0;
-  }
-  .focus-corners span:nth-child(3) {
-    bottom: 0;
-    right: 0;
-    border-width: 0 3px 3px 0;
-    border-radius: 0 0 0.5rem;
-  }
-  .focus-corners span:nth-child(4) {
-    bottom: 0;
-    left: 0;
-    border-width: 0 0 3px 3px;
-    border-radius: 0 0 0 0.5rem;
-  }
-  .scan-actions {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.65rem;
-    margin-top: 0.85rem;
-  }
-  .scan-actions input {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    opacity: 0;
-  }
-  .scan-actions label:has(input:focus-visible) {
-    outline: var(--st-focus-width) solid var(--st-focus-color);
-    outline-offset: var(--st-focus-offset);
-  }
   .manual-search {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -887,89 +570,12 @@
     align-items: end;
     margin-top: 1.1rem;
   }
-  .camera-shell {
-    position: relative;
-    overflow: hidden;
-    min-height: calc(100dvh - 11rem);
-    margin: -1rem;
-    border-radius: 0 0 1.5rem 1.5rem;
-    background: var(--st-semantic-surface-inverse);
-  }
-  .camera-shell video {
-    width: 100%;
-    height: calc(100dvh - 10rem);
-    object-fit: cover;
-  }
-  .card-guide {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: min(75vw, 20rem);
-    aspect-ratio: 2.5/3.5;
-    transform: translate(-50%, -55%);
-    border: 1px solid
-      color-mix(in srgb, var(--st-semantic-text-inverse) 52%, transparent);
-    border-radius: 0.75rem;
-    box-shadow: 0 0 0 100vmax var(--st-semantic-surface-overlay);
-  }
-  .card-guide span {
-    position: absolute;
-    width: 2.8rem;
-    height: 2.8rem;
-    border: solid var(--st-semantic-text-inverse);
-  }
-  .card-guide span:nth-child(1) {
-    top: -2px;
-    left: -2px;
-    border-width: 4px 0 0 4px;
-    border-radius: 0.75rem 0 0;
-  }
-  .card-guide span:nth-child(2) {
-    top: -2px;
-    right: -2px;
-    border-width: 4px 4px 0 0;
-    border-radius: 0 0.75rem 0 0;
-  }
-  .card-guide span:nth-child(3) {
-    bottom: -2px;
-    right: -2px;
-    border-width: 0 4px 4px 0;
-    border-radius: 0 0 0.75rem;
-  }
-  .card-guide span:nth-child(4) {
-    bottom: -2px;
-    left: -2px;
-    border-width: 0 0 4px 4px;
-    border-radius: 0 0 0 0.75rem;
-  }
-  .camera-actions {
-    position: absolute;
-    inset: auto 0 1rem;
-    display: grid;
-    justify-items: center;
-    gap: 0.6rem;
-  }
-  .capture-button {
-    display: grid;
-    place-items: center;
-    width: 4.5rem;
-    aspect-ratio: 1;
-    border: 3px solid var(--st-semantic-text-inverse);
-    border-radius: 50%;
-    background: transparent;
-  }
-  .capture-button:focus-visible,
+  .candidate:focus-visible,
   .candidate:focus-visible,
   .back-button:focus-visible,
   .text-button:focus-visible {
     outline: var(--st-focus-width) solid var(--st-focus-color);
     outline-offset: var(--st-focus-offset);
-  }
-  .capture-button span {
-    width: 3.5rem;
-    aspect-ratio: 1;
-    border-radius: 50%;
-    background: var(--st-semantic-text-inverse);
   }
   :global(.processing-card) {
     display: grid;
@@ -980,22 +586,12 @@
     border-radius: 1.4rem;
     box-shadow: var(--st-component-card-shadow);
   }
-  :global(.processing-card) img {
-    width: 100%;
-    max-height: 18rem;
-    object-fit: cover;
-    border-radius: 0.75rem;
-  }
   .processing-copy {
     display: grid;
     gap: 0.6rem;
   }
   .processing-copy small {
     color: var(--muted);
-  }
-  :global(.ocr-cancel) {
-    justify-self: start;
-    margin-top: 0.15rem;
   }
   .spinner {
     width: 2rem;
@@ -1004,19 +600,6 @@
     border-top-color: var(--primary);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
-  }
-  .progress-track {
-    overflow: hidden;
-    height: 0.35rem;
-    border-radius: 1rem;
-    background: var(--primary-soft);
-  }
-  .progress-track span {
-    display: block;
-    height: 100%;
-    border-radius: inherit;
-    background: var(--primary);
-    transition: width var(--st-motion-normal) var(--st-motion-easing);
   }
   .results {
     display: grid;
@@ -1284,19 +867,12 @@
       max-width: 42rem;
       margin-inline: auto;
     }
-    .scan-illustration {
-      min-height: 24rem;
-    }
   }
   @media (prefers-reduced-motion: reduce) {
     .spinner {
       animation: none;
       border-top-color: var(--st-semantic-border-strong);
     }
-    .progress-track span {
-      transition: none;
-    }
-    .card-back,
     .hero-orb {
       transform: none;
     }

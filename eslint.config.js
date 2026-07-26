@@ -10,7 +10,6 @@ export default tseslint.config(
       "node_modules/**",
       "coverage/**",
       "ml/**",
-      "public/ocr/**",
     ],
   },
   js.configs.recommended,

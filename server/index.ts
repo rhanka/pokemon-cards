@@ -14,7 +14,7 @@ const server = serve({
   port: runtime.config.port,
 }) as HttpServer;
 // Bound slow uploads before they can occupy all recognition admission slots.
-// Node's requestTimeout covers receiving the request, not the OCR response.
+// Node's requestTimeout bounds slow request bodies before application routes.
 server.requestTimeout = 15_000;
 server.headersTimeout = 10_000;
 

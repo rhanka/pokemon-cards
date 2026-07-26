@@ -53,8 +53,7 @@
     appName: "CardScope",
     recognition: {
       enabled: false,
-      processing: "server",
-      maxImageBytes: 2 * 1024 * 1024,
+      processing: "browser-vector",
     },
     auth: { enabled: false, scope: "openid profile email" },
     sync: {
@@ -1009,7 +1008,6 @@
       {:else if view === "scanner"}
         <ScannerPage
           {locale}
-          {config}
           {online}
           {valuationPreference}
           onAdd={addHolding}
