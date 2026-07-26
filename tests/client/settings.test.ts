@@ -8,8 +8,7 @@ const config: RuntimeConfig = {
   appName: "CardScope",
   recognition: {
     enabled: true,
-    processing: "server",
-    maxImageBytes: 2 * 1024 * 1024,
+    processing: "browser-vector",
   },
   auth: {
     enabled: true,

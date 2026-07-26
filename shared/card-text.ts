@@ -1,4 +1,4 @@
-import type { OcrLine, ParsedCardText } from "./types.js";
+import type { ParsedCardText, TextLine } from "./types.js";
 
 const FRACTION_NUMBER =
   /\b([A-Z]{0,4}\s?\d{1,3}[A-Z]?)\s*[/／]\s*([A-Z]{0,4}\s?\d{1,3})\b/i;
@@ -7,9 +7,8 @@ const CARD_NOISE =
   /^(basic|stage\s*[12]|trainer|supporter|item|stadium|energy|hp\s*\d+|pok[eé]mon|basic\s+pok[eé]mon|pok[eé]mon\s+de\s+base|stage\s*[12]\s+pok[eé]mon|pok[eé]mon\s+de\s+niveau\s*[12]|illus\.?|weakness|resistance|retreat|rule|ability)$/i;
 const STAT_LINE =
   /(?:\bHP\s*\d+|[×x]\s*2|[-+]\s*\d+|\b\d{2,3}\s*$|©|illus\.?|weakness|resistance|retreat)/i;
-// Tesseract often renders the energy symbol after a card's HP as one short
-// alphanumeric glyph (for example `Pikachu 40 HP D`). Treat that glyph as
-// part of the header suffix, not as part of the Pokémon name.
+// Card header transcriptions may contain a short energy glyph after HP (for
+// example `Pikachu 40 HP D`). Keep it out of the Pokémon name.
 const NAME_HP_SUFFIX =
   /\s+(?:HP\s*\d{1,3}|\d{1,3}\s*HP)(?:\s+[\p{L}\p{N}]{1,3})?\s*$/iu;
 const EFFECT_LINE =
@@ -32,7 +31,7 @@ function normalizedFractionNumber(value: string, total: string): string {
   const normalizedTotal = normalizedCardNumber(total);
   // Fractional subset identifiers use the same alphabetic family on both
   // sides (TG23/TG30, RC1/RC32, GG01/GG70). If the denominator is purely
-  // numeric, a lone leading glyph is instead a common OCR artefact such as
+  // numeric, a lone leading glyph is instead a common transcription artefact such as
   // `S58/102` on the Base Set Pikachu.
   if (
     /^\d{1,3}$/.test(normalizedTotal) &&
@@ -43,7 +42,7 @@ function normalizedFractionNumber(value: string, total: string): string {
   return number;
 }
 
-function likelyName(lines: OcrLine[]): OcrLine | undefined {
+function likelyName(lines: TextLine[]): TextLine | undefined {
   return lines
     .map((line) => {
       const text = cleanLine(line.text);
@@ -87,8 +86,8 @@ function likelyName(lines: OcrLine[]): OcrLine | undefined {
     })[0];
 }
 
-export function parseCardText(input: string | OcrLine[]): ParsedCardText {
-  const lines: OcrLine[] = Array.isArray(input)
+export function parseCardText(input: string | TextLine[]): ParsedCardText {
+  const lines: TextLine[] = Array.isArray(input)
     ? input
         .map((line) => ({ ...line, text: cleanLine(line.text) }))
         .filter((line) => line.text)

@@ -14,9 +14,8 @@ ranking, or sale of personal data.
 
 ## What the MVP does
 
-- camera or photo capture with a card alignment guide;
-- a guided camera/photo capture surface, manual catalogue search, and explicit
-  abstention;
+- manual catalogue search, explicit confirmation, and abstention while the
+  visual bundle is being qualified;
 - a rights-gated visual-retrieval pipeline: the target is browser ONNX in a
   Web Worker plus a TypeScript top-five lookup; no visual model is served until
   its corpus, model-distribution, and phone-benchmark gates pass;
@@ -61,10 +60,9 @@ The intended visual path decodes, bounds, and re-encodes the photo locally,
 which removes EXIF/GPS; a Web Worker turns it into a bounded embedding. The
 TypeScript API receives that vector, not the photo, and returns only a
 calibrated top-five/abstention result. Neither a photo nor a raw recognition
-signal is written to SQLite, logs, analytics, or a training corpus. The legacy
-OCR endpoint is not the visual-recognition product and must remain disabled in
-any release that does not yet have a cleared visual model. No metered Vision
-API, OCR CDN, or Python service is part of the target runtime. See [model and
+signal is written to SQLite, logs, analytics, or a training corpus. No server
+photo-upload endpoint, metered Vision API, or Python service is part of the
+target runtime. See [model and
 dataset study](docs/ml-model-study.md), [visual-recognition study](spec/SPEC_STUDY_VISUAL_RECOGNITION.md),
 [data refresh](docs/data-refresh.md), [architecture](docs/architecture.md),
 [deployment readiness](docs/deployment-readiness.md), [backup/restore
@@ -82,8 +80,8 @@ The complete non-secret contract is in [.env.example](.env.example). Important p
 - `CARD_IMAGES_ENABLED=false` (independent artwork/image reuse gate)
 - `MARKET_QUOTES_ENABLED=false` (safe default; enable only after the data-rights gate passes)
 - `CATALOG_MAX_RESPONSE_BYTES=2097152` (hard pre-JSON upstream-response budget; maximum accepted configuration is 16 MiB)
-- `RECOGNITION_ENABLED=false` unless a separately cleared visual recognizer is
-  enabled; legacy OCR is not an acceptable visual-recognition fallback
+- visual recognition remains unavailable until a separately cleared browser
+  model/index bundle is installed; no server image-upload fallback exists
 - `OIDC_ISSUER=https://auth.sent-tech.ca`
 - `OIDC_CLIENT_ID=pokemon-cards`
 - `OIDC_AUDIENCE=<absolute fragment-free registered API resource URI>`

@@ -7,16 +7,13 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "prepare:recognition": "node scripts/prepare-recognition-assets.mjs",
     "acquire:noncommercial-pilot": "tsx scripts/acquire-noncommercial-pilot.ts",
     "scrape:pokemon-cards": "tsx scripts/scrape-pokemon-cards.ts",
     "build:visual-model": "tsx scripts/build-visual-model.ts",
     "simulate:economics": "node --import tsx scripts/simulate-economics.ts",
-    "predev": "npm run prepare:recognition",
     "dev": "concurrently -k -n api,web -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
     "dev:client": "vite",
     "dev:server": "tsx watch server/index.ts",
-    "prebuild": "npm run prepare:recognition",
     "build": "vite build && tsc -p tsconfig.server.json",
     "start": "node dist-server/server/index.js",
     "check": "svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.server.json --noEmit && eslint .",
@@ -29,15 +26,12 @@
   "dependencies": {
     "@hono/node-server": "^2.0.11",
     "@sentropic/design-system-svelte": "^0.34.71",
-    "@tesseract.js-data/eng": "^1.0.0",
-    "@tesseract.js-data/fra": "^1.0.0",
     "dexie": "^4.2.0",
     "hono": "^4.9.0",
     "jose": "^6.1.0",
     "oidc-client-ts": "^3.3.0",
     "sharp": "^0.35.3",
     "svelte": "^5.56.7",
-    "tesseract.js": "^6.0.1",
     "zod": "^4.1.0"
   },
   "devDependencies": {

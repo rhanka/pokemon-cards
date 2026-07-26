@@ -30,18 +30,6 @@ export interface RuntimeConfig {
     marketQuotesEnabled: boolean;
     languages: CardLanguage[];
   };
-  recognition: {
-    enabled: boolean;
-    dataPath: string;
-    maxImageBytes: number;
-    maxPixels: number;
-    normalizedMaxEdge: number;
-    timeoutMs: number;
-    idleTimeoutMs: number;
-    rateLimitPerMinute: number;
-    globalRateLimitPerMinute: number;
-    maxConcurrentUploads: number;
-  };
   oidc: {
     enabled: boolean;
     issuer: string | null;
@@ -69,14 +57,6 @@ const DEFAULT_MAX_SYNC_ACCOUNTS = 1_200;
 const DEFAULT_MAX_ACCOUNT_BYTES = 2_621_440;
 const MAX_CATALOG_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_CATALOG_CACHE_BYTES = 1024 * 1024 * 1024;
-const MAX_RECOGNITION_IMAGE_BYTES = 4 * 1024 * 1024;
-const MAX_RECOGNITION_PIXELS = 4_000_000;
-const MAX_RECOGNITION_EDGE = 1_600;
-const MAX_RECOGNITION_TIMEOUT_MS = 45_000;
-const MAX_RECOGNITION_IDLE_TIMEOUT_MS = 15 * 60 * 1_000;
-const MAX_RECOGNITION_RATE_PER_MINUTE = 60;
-const MAX_RECOGNITION_GLOBAL_RATE_PER_MINUTE = 120;
-const MAX_RECOGNITION_CONCURRENT_UPLOADS = 4;
 
 export function loadLocalEnvironment(file = ".env"): boolean {
   try {
@@ -268,18 +248,6 @@ export function loadConfig(
     1024 * 1024,
     MAX_CATALOG_CACHE_BYTES,
   );
-  const recognitionMaxImageBytes = parseInteger(
-    env.RECOGNITION_MAX_IMAGE_BYTES,
-    2 * 1024 * 1024,
-    "RECOGNITION_MAX_IMAGE_BYTES",
-    64 * 1024,
-  );
-  if (recognitionMaxImageBytes > MAX_RECOGNITION_IMAGE_BYTES) {
-    throw new Error(
-      `RECOGNITION_MAX_IMAGE_BYTES must not exceed ${MAX_RECOGNITION_IMAGE_BYTES}`,
-    );
-  }
-
   return {
     host: env.HOST?.trim() || "0.0.0.0",
     port: parseInteger(env.PORT, DEFAULT_PORT, "PORT", 1),
@@ -377,66 +345,6 @@ export function loadConfig(
       ),
       languages: ["en", "fr"],
     },
-    recognition: {
-      enabled: parseBoolean(
-        env.RECOGNITION_ENABLED,
-        false,
-        "RECOGNITION_ENABLED",
-      ),
-      dataPath: path.resolve(
-        env.RECOGNITION_DATA_PATH?.trim() || "./recognition-data",
-      ),
-      maxImageBytes: recognitionMaxImageBytes,
-      maxPixels: parseBoundedInteger(
-        env.RECOGNITION_MAX_PIXELS,
-        4_000_000,
-        "RECOGNITION_MAX_PIXELS",
-        100_000,
-        MAX_RECOGNITION_PIXELS,
-      ),
-      normalizedMaxEdge: parseBoundedInteger(
-        env.RECOGNITION_NORMALIZED_MAX_EDGE,
-        1_600,
-        "RECOGNITION_NORMALIZED_MAX_EDGE",
-        320,
-        MAX_RECOGNITION_EDGE,
-      ),
-      timeoutMs: parseBoundedInteger(
-        env.RECOGNITION_TIMEOUT_MS,
-        30_000,
-        "RECOGNITION_TIMEOUT_MS",
-        5_000,
-        MAX_RECOGNITION_TIMEOUT_MS,
-      ),
-      idleTimeoutMs: parseBoundedInteger(
-        env.RECOGNITION_IDLE_TIMEOUT_MS,
-        5 * 60 * 1_000,
-        "RECOGNITION_IDLE_TIMEOUT_MS",
-        10_000,
-        MAX_RECOGNITION_IDLE_TIMEOUT_MS,
-      ),
-      rateLimitPerMinute: parseBoundedInteger(
-        env.RECOGNITION_RATE_LIMIT_PER_MINUTE,
-        10,
-        "RECOGNITION_RATE_LIMIT_PER_MINUTE",
-        1,
-        MAX_RECOGNITION_RATE_PER_MINUTE,
-      ),
-      globalRateLimitPerMinute: parseBoundedInteger(
-        env.RECOGNITION_GLOBAL_RATE_LIMIT_PER_MINUTE,
-        30,
-        "RECOGNITION_GLOBAL_RATE_LIMIT_PER_MINUTE",
-        1,
-        MAX_RECOGNITION_GLOBAL_RATE_PER_MINUTE,
-      ),
-      maxConcurrentUploads: parseBoundedInteger(
-        env.RECOGNITION_MAX_CONCURRENT_UPLOADS,
-        4,
-        "RECOGNITION_MAX_CONCURRENT_UPLOADS",
-        1,
-        MAX_RECOGNITION_CONCURRENT_UPLOADS,
-      ),
-    },
     oidc: {
       enabled: oidcEnabled,
       issuer: oidcIssuer,
@@ -492,12 +400,10 @@ export function loadConfig(
 export function toPublicConfig(config: RuntimeConfig): PublicAppConfig {
   return {
     recognition: {
-      enabled:
-        config.recognition.enabled &&
-        (config.catalogue.tcgdexCatalogEnabled ||
-          config.catalogue.pokemonTcgCatalogEnabled),
-      processing: "server",
-      maxImageBytes: config.recognition.maxImageBytes,
+      // A browser Worker can only be enabled after a verified visual bundle is
+      // installed. No server image-upload or legacy fallback exists.
+      enabled: false,
+      processing: "browser-vector",
     },
     auth: {
       enabled: config.oidc.enabled,

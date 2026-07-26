@@ -10,7 +10,6 @@ import type {
   CollectionSnapshot,
   Holding,
   PriceQuote as Quote,
-  RuntimeConfig,
 } from "../../src/lib/types";
 
 const normalQuote: Quote = {
@@ -267,33 +266,16 @@ describe("valuation UI", () => {
 });
 
 describe("scanner language inference", () => {
-  it("should expose scan controls without asking for the printed language", () => {
-    const config: RuntimeConfig = {
-      appName: "CardScope",
-      recognition: {
-        enabled: true,
-        processing: "server",
-        maxImageBytes: 2 * 1024 * 1024,
-      },
-      auth: { enabled: false, scope: "openid" },
-      sync: {
-        enabled: false,
-        retentionDays: 1826,
-        maxBatchSize: 100,
-        maxOperationBytes: 64 * 1024,
-      },
-      valuation: { marketQuotesEnabled: false },
-    };
+  it("should keep printed language out of the manual catalogue flow", () => {
     render(ScannerPage, {
       locale: "en",
-      config,
       online: true,
       valuationPreference: { market: "tcgplayer", currency: "USD" },
       onAdd: vi.fn(),
     });
 
-    expect(screen.getByRole("button", { name: "Use camera" })).toBeEnabled();
-    expect(screen.getByLabelText("Choose photo")).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Use camera" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Choose photo")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Search" })).toBeEnabled();
     expect(
       screen.queryByRole("group", { name: "Card language" }),

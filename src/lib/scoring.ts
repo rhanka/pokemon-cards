@@ -41,14 +41,14 @@ export function textSimilarity(a?: string, b?: string): number {
   if (left === right) return 1;
   const edit =
     1 - levenshteinDistance(left, right) / Math.max(left.length, right.length);
-  const normalizeOcrGlyphs = (value: string) =>
+  const normalizeLikelyGlyphs = (value: string) =>
     value.replaceAll("0", "o").replaceAll("5", "s").replaceAll("8", "b");
-  const ocrLeft = normalizeOcrGlyphs(left);
-  const ocrRight = normalizeOcrGlyphs(right);
-  const ocrEdit =
+  const normalizedLeft = normalizeLikelyGlyphs(left);
+  const normalizedRight = normalizeLikelyGlyphs(right);
+  const glyphEdit =
     1 -
-    levenshteinDistance(ocrLeft, ocrRight) /
-      Math.max(ocrLeft.length, ocrRight.length);
+    levenshteinDistance(normalizedLeft, normalizedRight) /
+      Math.max(normalizedLeft.length, normalizedRight.length);
   const leftTokens = new Set(left.split(" "));
   const rightTokens = new Set(right.split(" "));
   const intersection = [...leftTokens].filter((token) =>
@@ -58,7 +58,7 @@ export function textSimilarity(a?: string, b?: string): number {
   const tokenScore = union > 0 ? intersection / union : 0;
   return Math.max(
     0,
-    Math.min(1, Math.max(edit, ocrEdit) * 0.82 + tokenScore * 0.18),
+    Math.min(1, Math.max(edit, glyphEdit) * 0.82 + tokenScore * 0.18),
   );
 }
 
