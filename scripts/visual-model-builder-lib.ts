@@ -17,6 +17,7 @@ export interface ModelBuildOptions {
   output: string;
   pretrainedBackbone: boolean;
   python: string;
+  resumeCheckpoint: string | null;
   seed: number;
   workers: number;
 }
@@ -33,7 +34,7 @@ function usage(): never {
       "Usage: npm run build:visual-model -- --acknowledge-experimental-model --manifest=<rights-manifest.json> --assets=<assets> [options]",
       "Options: --output=<ignored directory> --epochs=<1..200> --seed=<integer> --device=<auto|cpu|cuda>",
       "         --operation=<train|train-noncommercial-experiment> --python=<executable> --workers=<0..32>",
-      "         --pretrained-backbone --freeze-backbone-epochs=<0..200>",
+      "         --pretrained-backbone --freeze-backbone-epochs=<0..200> --resume-checkpoint=<model.last.pt>",
       "         --export --index --benchmark --calibration-samples=<1..4096>",
       "This runner never accepts --release and never deploys or publishes an artifact.",
     ].join("\n"),
@@ -100,6 +101,7 @@ export function parseModelBuildOptions(
     "operation",
     "output",
     "python",
+    "resume-checkpoint",
     "seed",
     "workers",
   ]);
@@ -161,6 +163,9 @@ export function parseModelBuildOptions(
     ),
     pretrainedBackbone,
     python: values.get("python") ?? "python3",
+    resumeCheckpoint: values.has("resume-checkpoint")
+      ? resolve(cwd, values.get("resume-checkpoint")!)
+      : null,
     seed: parseSeed(values.get("seed") ?? "20260722"),
     workers: parseWorkers(values.get("workers")),
   };
@@ -214,6 +219,9 @@ export function createModelBuildPlan(
   ];
   if (options.pretrainedBackbone) {
     commands[1]!.args.push("--pretrained-backbone");
+  }
+  if (options.resumeCheckpoint) {
+    commands[1]!.args.push("--resume-checkpoint", options.resumeCheckpoint);
   }
   const canBenchmark =
     (roleCounts.capture ?? 0) > 0 && (roleCounts.unknown ?? 0) > 0;
