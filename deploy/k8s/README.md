@@ -8,9 +8,10 @@ kubectl apply --server-side --dry-run=server -k deploy/k8s/overlays/prod
 ```
 
 Production uses one replica and `Recreate` because the first tier uses SQLite
-on a 4 GiB ReadWriteOnce PVC. The authorised Scaleway contract explicitly uses
-the live `sbs-default` StorageClass. A future OVH overlay must replace it only
-after that cluster's portable storage mapping is active.
+on a 4 GiB ReadWriteOnce PVC. The base manifest uses the portable
+`block-standard` class; on OVH BHS5 it maps to Cinder Block Storage. The
+`scaleway` overlay retains `sbs-default` only for source-cluster rollback or a
+fresh Scaleway restore. A bound PVC is never retargeted in place.
 
 The `not-published` image tag in Git is a fail-closed render placeholder and is never pushed. Deployment automation accepts only a 40-character commit that is an ancestor of `origin/main`, resolves its `sha-<commit>` package, verifies the OCI revision label and GitHub build-provenance attestation, then replaces the placeholder with the registry digest. Before applying, it validates the namespace-scoped context, confirms the credential cannot create cluster-scoped RBAC, checks a fresh owner capacity approval and quota headroom, and performs a server-side dry-run.
 
@@ -47,6 +48,11 @@ An encrypted off-PVC backup target, deletion/expiry policy, and isolated
 restore rehearsal are required before making a recoverable-backup or
 commercial five-year-retention claim; they do not block publishing the
 fail-closed scan service while `OIDC_REQUIRED=false`.
+
+The OVH target needs a namespace-scoped kubeconfig, a fresh `block-standard`
+PVC restored from the source SQLite backup, and a TLS-ready ingress before DNS
+is switched. Keep the Scaleway record and PVC intact until an OVH browser/API
+smoke test and rollback rehearsal pass.
 
 The checked-in POC enables TCGdex catalogue metadata only. Visual recognition
 has no server image-upload fallback until a cleared browser bundle exists.
