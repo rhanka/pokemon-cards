@@ -47,6 +47,10 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--triplet-margin", type=float, default=0.2)
     train.add_argument("--workers", type=int, default=0)
     train.add_argument("--device", default="auto")
+    train.add_argument("--checkpoint-every-epochs", type=int, default=1)
+    train.add_argument("--resume-checkpoint")
+    train.add_argument("--pretrained-backbone", action="store_true")
+    train.add_argument("--freeze-backbone-epochs", type=int, default=0)
     train.add_argument("--operation", choices=TRAINING_OPERATION_CHOICES, default=Operation.TRAIN.value)
 
     benchmark = subparsers.add_parser("benchmark", help="evaluate UID-separated held-out captures")
@@ -77,6 +81,16 @@ def build_parser() -> argparse.ArgumentParser:
     index.add_argument("--output-dir", required=True)
     index.add_argument("--release", action="store_true")
     index.add_argument("--operation", choices=TRAINING_OPERATION_CHOICES, default=Operation.TRAIN.value)
+
+    verify = subparsers.add_parser(
+        "verify-artifacts", help="verify hashes and same-reference retrieval through ONNX and the index"
+    )
+    verify.add_argument("--manifest", required=True)
+    verify.add_argument("--asset-root", required=True)
+    verify.add_argument("--model", required=True)
+    verify.add_argument("--index", required=True)
+    verify.add_argument("--output", required=True)
+    verify.add_argument("--operation", choices=TRAINING_OPERATION_CHOICES, default=Operation.TRAIN.value)
     return parser
 
 
@@ -122,6 +136,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     triplet_margin=args.triplet_margin,
                     workers=args.workers,
                     device=args.device,
+                    checkpoint_every_epochs=args.checkpoint_every_epochs,
+                    resume_checkpoint=args.resume_checkpoint,
+                    pretrained_backbone=args.pretrained_backbone,
+                    freeze_backbone_epochs=args.freeze_backbone_epochs,
                 ),
                 operation=args.operation,
             )
@@ -159,6 +177,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 model_path=args.model,
                 output_dir=args.output_dir,
                 release=args.release,
+                operation=args.operation,
+            )
+        elif args.command == "verify-artifacts":
+            from .verify import verify_reference_retrieval
+
+            payload = verify_reference_retrieval(
+                manifest_path=args.manifest,
+                asset_root=args.asset_root,
+                model_path=args.model,
+                index_path=args.index,
+                output_path=args.output,
                 operation=args.operation,
             )
         else:  # pragma: no cover - argparse prevents this branch

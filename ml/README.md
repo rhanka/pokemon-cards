@@ -93,7 +93,8 @@ npm run build:visual-model -- \
   --acknowledge-experimental-model \
   --manifest=ml/data/pokemon-cards-scrape/rights-manifest.json \
   --assets=ml/data/pokemon-cards-scrape/assets \
-  --epochs=20 --export --index
+  --python=ml/.venv/bin/python --workers=4 --pretrained-backbone \
+  --freeze-backbone-epochs=1 --epochs=20 --export --index
 ```
 
 The builder invokes Python through argument vectors (no shell), first validates
@@ -102,6 +103,14 @@ in the checkpoint, export, and index. It does not accept a release flag,
 publish an artifact, or deploy anything. A reference-only corpus can produce a
 baseline checkpoint, but `--benchmark` is rejected until the manifest has
 independent camera captures and unknown-card probes.
+`--pretrained-backbone` explicitly downloads the TorchVision ImageNet MobileNet
+weights for local fine-tuning and records that origin in training metadata; omit
+the flag only for an intentionally random-initialized experiment.
+The current float ONNX artifact is below the 5 MiB runtime budget and is the
+selected retrieval model. Static INT8 is exported as a fidelity diagnostic only;
+it is not selected automatically. When `--index` is selected, the builder also reloads the ONNX model and verifies
+that every canonical reference retrieves itself from the generated index. This
+is only an artifact-integrity smoke test, not a camera-recognition benchmark.
 
 ## Train, benchmark, export, and index
 

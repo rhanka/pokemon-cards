@@ -11,16 +11,21 @@ EMBEDDING_DIMENSION = 128
 INPUT_SIZE = 224
 
 
-def build_model(*, embedding_dimension: int = EMBEDDING_DIMENSION) -> Any:
+def build_model(
+    *,
+    embedding_dimension: int = EMBEDDING_DIMENSION,
+    pretrained_backbone: bool = False,
+) -> Any:
     if embedding_dimension != EMBEDDING_DIMENSION:
         raise ValueError(f"the product contract requires {EMBEDDING_DIMENSION} dimensions")
-    torch, nn, functional, mobilenet_v3_small = _torch_stack()
+    torch, nn, functional, mobilenet_v3_small, weights_enum = _torch_stack()
 
     class MobileNetV3Embedding(nn.Module):
         def __init__(self) -> None:
             super().__init__()
-            # Explicitly never ask torchvision for remote weights.
-            backbone = mobilenet_v3_small(weights=None)
+            backbone = mobilenet_v3_small(
+                weights=weights_enum.DEFAULT if pretrained_backbone else None
+            )
             self.features = backbone.features
             self.avgpool = nn.AdaptiveAvgPool2d(1)
             feature_dimension = backbone.classifier[0].in_features
@@ -43,7 +48,7 @@ def build_model(*, embedding_dimension: int = EMBEDDING_DIMENSION) -> Any:
 
 
 def load_checkpoint(path: str, *, device: str = "cpu") -> tuple[Any, dict[str, Any]]:
-    torch, _, _, _ = _torch_stack()
+    torch, _, _, _, _ = _torch_stack()
     checkpoint = torch.load(path, map_location=device, weights_only=False)
     if not isinstance(checkpoint, dict) or checkpoint.get("format_version") != 1:
         raise ValueError("unsupported or malformed CardScope checkpoint")
@@ -57,14 +62,14 @@ def load_checkpoint(path: str, *, device: str = "cpu") -> tuple[Any, dict[str, A
     return model, checkpoint
 
 
-def _torch_stack() -> tuple[Any, Any, Any, Any]:
+def _torch_stack() -> tuple[Any, Any, Any, Any, Any]:
     try:
         import torch
         from torch import nn
         from torch.nn import functional
-        from torchvision.models import mobilenet_v3_small
+        from torchvision.models import MobileNet_V3_Small_Weights, mobilenet_v3_small
     except ImportError as exc:
         raise DependencyUnavailableError(
             "model construction requires Torch and torchvision; install cardscope-ml[train]"
         ) from exc
-    return torch, nn, functional, mobilenet_v3_small
+    return torch, nn, functional, mobilenet_v3_small, MobileNet_V3_Small_Weights

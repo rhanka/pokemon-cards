@@ -10,17 +10,21 @@ export interface ModelBuildOptions {
   device: string;
   epochs: number;
   exportOnnx: boolean;
+  freezeBackboneEpochs: number;
   index: boolean;
   manifest: string;
   operation: "train" | typeof EXPERIMENTAL_OPERATION;
   output: string;
+  pretrainedBackbone: boolean;
   python: string;
   seed: number;
+  workers: number;
 }
 
 export interface ModelBuildPlan {
   commands: Array<{ name: string; args: string[] }>;
-  benchmarkPreflight: "not-requested" | "ready" | "missing-captures-or-unknowns";
+  benchmarkPreflight:
+    "not-requested" | "ready" | "missing-captures-or-unknowns";
 }
 
 function usage(): never {
@@ -28,14 +32,19 @@ function usage(): never {
     [
       "Usage: npm run build:visual-model -- --acknowledge-experimental-model --manifest=<rights-manifest.json> --assets=<assets> [options]",
       "Options: --output=<ignored directory> --epochs=<1..200> --seed=<integer> --device=<auto|cpu|cuda>",
-      "         --operation=<train|train-noncommercial-experiment> --python=<executable>",
+      "         --operation=<train|train-noncommercial-experiment> --python=<executable> --workers=<0..32>",
+      "         --pretrained-backbone --freeze-backbone-epochs=<0..200>",
       "         --export --index --benchmark --calibration-samples=<1..4096>",
       "This runner never accepts --release and never deploys or publishes an artifact.",
     ].join("\n"),
   );
 }
 
-function parsePositiveInteger(value: string | undefined, name: string, maximum: number): number {
+function parsePositiveInteger(
+  value: string | undefined,
+  name: string,
+  maximum: number,
+): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > maximum) {
     throw new Error(`${name} must be an integer between 1 and ${maximum}`);
@@ -51,17 +60,31 @@ function parseSeed(value: string | undefined): number {
   return parsed;
 }
 
-export function parseModelBuildOptions(arguments_: string[], cwd = process.cwd()): ModelBuildOptions {
+function parseWorkers(value: string | undefined): number {
+  const parsed = Number(value ?? "0");
+  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 32) {
+    throw new Error("--workers must be an integer between 0 and 32");
+  }
+  return parsed;
+}
+
+export function parseModelBuildOptions(
+  arguments_: string[],
+  cwd = process.cwd(),
+): ModelBuildOptions {
   const values = new Map<string, string>();
   let acknowledgeExperimentalModel = false;
   let benchmark = false;
   let exportOnnx = false;
   let index = false;
+  let pretrainedBackbone = false;
   for (const argument of arguments_) {
-    if (argument === "--acknowledge-experimental-model") acknowledgeExperimentalModel = true;
+    if (argument === "--acknowledge-experimental-model")
+      acknowledgeExperimentalModel = true;
     else if (argument === "--benchmark") benchmark = true;
     else if (argument === "--export") exportOnnx = true;
     else if (argument === "--index") index = true;
+    else if (argument === "--pretrained-backbone") pretrainedBackbone = true;
     else if (argument.startsWith("--") && argument.includes("=")) {
       const [key, value] = argument.slice(2).split("=", 2) as [string, string];
       values.set(key, value);
@@ -72,21 +95,50 @@ export function parseModelBuildOptions(arguments_: string[], cwd = process.cwd()
     "calibration-samples",
     "device",
     "epochs",
+    "freeze-backbone-epochs",
     "manifest",
     "operation",
     "output",
     "python",
     "seed",
+    "workers",
   ]);
-  if (!acknowledgeExperimentalModel || !values.has("manifest") || !values.has("assets")) usage();
+  if (
+    !acknowledgeExperimentalModel ||
+    !values.has("manifest") ||
+    !values.has("assets")
+  )
+    usage();
   for (const key of values.keys()) if (!known.has(key)) usage();
   if (index && !exportOnnx) throw new Error("--index requires --export");
 
   const operation = values.get("operation") ?? EXPERIMENTAL_OPERATION;
   if (operation !== "train" && operation !== EXPERIMENTAL_OPERATION) {
-    throw new Error("--operation must be train or train-noncommercial-experiment");
+    throw new Error(
+      "--operation must be train or train-noncommercial-experiment",
+    );
   }
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const epochs = parsePositiveInteger(
+    values.get("epochs") ?? "20",
+    "--epochs",
+    200,
+  );
+  const freezeBackboneEpochs = Number(
+    values.get("freeze-backbone-epochs") ?? "0",
+  );
+  if (
+    !Number.isSafeInteger(freezeBackboneEpochs) ||
+    freezeBackboneEpochs < 0 ||
+    freezeBackboneEpochs > epochs
+  ) {
+    throw new Error(
+      "--freeze-backbone-epochs must be an integer between 0 and --epochs",
+    );
+  }
+  if (freezeBackboneEpochs > 0 && !pretrainedBackbone) {
+    throw new Error("--freeze-backbone-epochs requires --pretrained-backbone");
+  }
   return {
     acknowledgeExperimentalModel,
     assets: resolve(cwd, values.get("assets")!),
@@ -97,14 +149,20 @@ export function parseModelBuildOptions(arguments_: string[], cwd = process.cwd()
       4096,
     ),
     device: values.get("device") ?? "auto",
-    epochs: parsePositiveInteger(values.get("epochs") ?? "20", "--epochs", 200),
+    epochs,
     exportOnnx,
+    freezeBackboneEpochs,
     index,
     manifest: resolve(cwd, values.get("manifest")!),
     operation,
-    output: resolve(cwd, values.get("output") ?? `ml/artifacts/visual-model-${timestamp}`),
+    output: resolve(
+      cwd,
+      values.get("output") ?? `ml/artifacts/visual-model-${timestamp}`,
+    ),
+    pretrainedBackbone,
     python: values.get("python") ?? "python3",
     seed: parseSeed(values.get("seed") ?? "20260722"),
+    workers: parseWorkers(values.get("workers")),
   };
 }
 
@@ -145,12 +203,20 @@ export function createModelBuildPlan(
         String(options.epochs),
         "--device",
         options.device,
+        "--workers",
+        String(options.workers),
+        "--freeze-backbone-epochs",
+        String(options.freezeBackboneEpochs),
         "--operation",
         options.operation,
       ],
     },
   ];
-  const canBenchmark = (roleCounts.capture ?? 0) > 0 && (roleCounts.unknown ?? 0) > 0;
+  if (options.pretrainedBackbone) {
+    commands[1]!.args.push("--pretrained-backbone");
+  }
+  const canBenchmark =
+    (roleCounts.capture ?? 0) > 0 && (roleCounts.unknown ?? 0) > 0;
   if (options.benchmark && !canBenchmark) {
     return { commands, benchmarkPreflight: "missing-captures-or-unknowns" };
   }
@@ -210,9 +276,29 @@ export function createModelBuildPlan(
         "--asset-root",
         options.assets,
         "--model",
-        resolve(options.output, "export", "model.int8.onnx"),
+        resolve(options.output, "export", "model.float.onnx"),
         "--output-dir",
         resolve(options.output, "index"),
+        "--operation",
+        options.operation,
+      ],
+    });
+    commands.push({
+      name: "verify-artifacts",
+      args: [
+        "-m",
+        "cardscope_ml",
+        "verify-artifacts",
+        "--manifest",
+        options.manifest,
+        "--asset-root",
+        options.assets,
+        "--model",
+        resolve(options.output, "export", "model.float.onnx"),
+        "--index",
+        resolve(options.output, "index", "reference-index.json"),
+        "--output",
+        resolve(options.output, "reference-smoke.json"),
         "--operation",
         options.operation,
       ],

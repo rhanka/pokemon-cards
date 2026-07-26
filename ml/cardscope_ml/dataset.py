@@ -86,13 +86,10 @@ class UIDBatchSampler:
         self.samples_per_class = samples_per_class
         self.seed = seed
         self.epoch = 0
-        self.batches = max(
-            1,
-            math.ceil(
-                sum(len(indices) for indices in self.grouped.values())
-                / (self.classes_per_batch * self.samples_per_class)
-            ),
-        )
+        # Count UID groups, not source images: with one catalogue reference per
+        # card, the old image-based count silently exposed only ~P/K of the
+        # available printings in an epoch.
+        self.batches = max(1, math.ceil(len(grouped) / self.classes_per_batch))
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = epoch
@@ -103,8 +100,14 @@ class UIDBatchSampler:
     def __iter__(self) -> Iterator[list[tuple[int, int, int, int]]]:
         rng = random.Random(f"cardscope-sampler-v1:{self.seed}:{self.epoch}")
         uids = tuple(self.grouped)
+        shuffled_uids = list(uids)
+        rng.shuffle(shuffled_uids)
         for batch_index in range(self.batches):
-            chosen_uids = rng.sample(uids, self.classes_per_batch)
+            start = batch_index * self.classes_per_batch
+            chosen_uids = shuffled_uids[start : start + self.classes_per_batch]
+            if len(chosen_uids) < self.classes_per_batch:
+                fill_candidates = [uid for uid in uids if uid not in chosen_uids]
+                chosen_uids.extend(rng.sample(fill_candidates, self.classes_per_batch - len(chosen_uids)))
             batch: list[tuple[int, int, int, int]] = []
             draw_index = 0
             for uid in chosen_uids:
@@ -121,6 +124,24 @@ def evaluation_transform() -> Any:
     return _transform(training=False)
 
 
+def pad_to_square(image: Any, *, fill: tuple[int, int, int] = (127, 127, 127)) -> Any:
+    """Preserve every card edge before the model's square resize.
+
+    Card names and collector numbers sit close to the top and bottom borders;
+    centre-cropping a portrait card discards that information.
+    """
+
+    Image = _image()
+    if not isinstance(image, Image.Image):
+        raise TypeError("image must be a PIL.Image.Image")
+    source = image.convert("RGB")
+    width, height = source.size
+    edge = max(width, height)
+    canvas = Image.new("RGB", (edge, edge), fill)
+    canvas.paste(source, ((edge - width) // 2, (edge - height) // 2))
+    return canvas
+
+
 def _transform(*, training: bool) -> Any:
     del training
     try:
@@ -131,8 +152,8 @@ def _transform(*, training: bool) -> Any:
         ) from exc
     return transforms.Compose(
         [
-            transforms.Resize(256, antialias=True),
-            transforms.CenterCrop(224),
+            transforms.Lambda(pad_to_square),
+            transforms.Resize((224, 224), antialias=True),
             transforms.ToTensor(),
             transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
         ]
