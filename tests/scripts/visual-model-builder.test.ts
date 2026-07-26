@@ -13,6 +13,7 @@ describe("visual model builder", () => {
         "--manifest=ml/data/demo/rights-manifest.json",
         "--assets=ml/data/demo/assets",
         "--output=/tmp/cardscope-model",
+        "--workers=4",
         "--export",
         "--index",
       ],
@@ -21,14 +22,18 @@ describe("visual model builder", () => {
     const plan = createModelBuildPlan(options, { reference: 100 });
 
     expect(options.operation).toBe("train-noncommercial-experiment");
+    expect(options.workers).toBe(4);
     expect(plan.benchmarkPreflight).toBe("not-requested");
     expect(plan.commands.map((command) => command.name)).toEqual([
       "validate-manifest",
       "train",
       "export",
       "build-index",
+      "verify-artifacts",
     ]);
-    expect(plan.commands.flatMap((command) => command.args)).not.toContain("--release");
+    expect(plan.commands.flatMap((command) => command.args)).not.toContain(
+      "--release",
+    );
     expect(plan.commands[1]!.args).toContain("train-noncommercial-experiment");
   });
 
@@ -45,6 +50,18 @@ describe("visual model builder", () => {
       ),
     ).toThrow("--index requires --export");
 
+    expect(() =>
+      parseModelBuildOptions(
+        [
+          "--acknowledge-experimental-model",
+          "--manifest=manifest.json",
+          "--assets=assets",
+          "--workers=33",
+        ],
+        "/repo",
+      ),
+    ).toThrow("--workers must be an integer between 0 and 32");
+
     const options = parseModelBuildOptions(
       [
         "--acknowledge-experimental-model",
@@ -54,8 +71,8 @@ describe("visual model builder", () => {
       ],
       "/repo",
     );
-    expect(createModelBuildPlan(options, { reference: 100 }).benchmarkPreflight).toBe(
-      "missing-captures-or-unknowns",
-    );
+    expect(
+      createModelBuildPlan(options, { reference: 100 }).benchmarkPreflight,
+    ).toBe("missing-captures-or-unknowns");
   });
 });

@@ -35,8 +35,16 @@ def build_reference_index(
     export_metadata = _load_export_metadata(Path(model_path))
     if export_metadata.get("manifest_fingerprint") != manifest.fingerprint:
         raise ValueError("export and rights manifest fingerprints differ")
-    if export_metadata.get("int8_onnx_sha256") != _sha256(Path(model_path)):
+    model_hash = _sha256(Path(model_path))
+    known_model_hashes = {
+        export_metadata.get("float_onnx_sha256"),
+        export_metadata.get("int8_onnx_sha256"),
+    }
+    if model_hash not in known_model_hashes:
         raise ValueError("export metadata does not match the supplied ONNX model")
+    runtime_model = export_metadata.get("runtime_model")
+    if runtime_model and Path(model_path).name != runtime_model:
+        raise ValueError("supplied ONNX model is not the export's selected runtime model")
     if export_metadata.get("training_rights_operation", Operation.TRAIN.value) != training_operation.value:
         raise ValueError("export and requested training rights operations differ")
     if release and training_operation is not Operation.TRAIN:

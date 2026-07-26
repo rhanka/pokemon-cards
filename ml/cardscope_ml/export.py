@@ -61,6 +61,10 @@ def export_onnx_int8(
         dynamic_axes={"image": {0: "batch"}, "embedding": {0: "batch"}},
         opset_version=17,
         do_constant_folding=True,
+        # Keep the export stack bounded to the declared ONNX dependency set.
+        # PyTorch 2.7 otherwise switches to its dynamo exporter, which pulls an
+        # undeclared onnxscript dependency at runtime.
+        dynamo=False,
     )
     onnx.checker.check_model(onnx.load(str(float_path)))
 
@@ -109,12 +113,16 @@ def export_onnx_int8(
         "float_onnx_bytes": float_path.stat().st_size,
         "int8_onnx_bytes": int8_path.stat().st_size,
         "int8_at_most_5_mib": int8_path.stat().st_size <= 5 * 1024 * 1024,
+        "runtime_model": "model.float.onnx",
+        "runtime_model_sha256": _sha256(float_path),
+        "runtime_model_bytes": float_path.stat().st_size,
+        "runtime_model_at_most_5_mib": float_path.stat().st_size <= 5 * 1024 * 1024,
         "calibration_items": len(candidates),
         "mean_float_int8_cosine": sum(similarities) / len(similarities),
         "training_rights_operation": training_operation.value,
         "local_only": training_operation is Operation.TRAIN_NONCOMMERCIAL_EXPERIMENT,
         "release_rights_checked": release,
-        "quantization": "onnxruntime-static-qdq-uint8-activation-int8-weight",
+        "quantization": "onnxruntime-static-qdq-uint8-activation-int8-weight-diagnostic-only",
     }
     write_canonical_json(destination / "export-metadata.json", metadata)
     return metadata
