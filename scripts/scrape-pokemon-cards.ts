@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   fusionAssetPath,
@@ -26,6 +27,7 @@ const STATE_CHECKPOINT_INTERVAL = 25;
 
 interface Options {
   acceptSourceTerms: boolean;
+  allowUnavailableAssets: boolean;
   all: boolean;
   concurrency: number;
   dryRun: boolean;
@@ -84,6 +86,16 @@ interface FetchResult {
   url: string;
 }
 
+interface DownloadFailure {
+  cardId: string;
+  reason: string;
+}
+
+export interface UnavailableAsset {
+  card: FusionCardRow;
+  reason: string;
+}
+
 class RetryableHttpError extends Error {
   readonly retryAfterMs: number | undefined;
 
@@ -103,8 +115,9 @@ function usage(): never {
       "Usage: tsx scripts/scrape-pokemon-cards.ts --accept-source-terms (--limit=<1..20000> | --all) [options]",
       "Options: --offset=<0..19999> --output=<ignored directory> --concurrency=<1..4>",
       "         --max-image-bytes=<bytes> --max-pixels=<pixels> --max-total-bytes=<bytes>",
-      "         --timeout-ms=<ms> --dry-run",
+      "         --timeout-ms=<ms> --allow-unavailable-assets --dry-run",
       "--all requires an explicit --max-total-bytes. Re-running the same command resumes from scrape-state.json.",
+      "--allow-unavailable-assets is explicit: it writes a partial corpus and records every failed source URL.",
       "The collector uses only the declared CSV and approved image CDN; it does not crawl pages or bypass access controls.",
     ].join("\n"),
   );
@@ -137,10 +150,13 @@ function parseNonNegativeInteger(
 function parseOptions(arguments_: string[]): Options {
   const values = new Map<string, string>();
   let acceptSourceTerms = false;
+  let allowUnavailableAssets = false;
   let all = false;
   let dryRun = false;
   for (const argument of arguments_) {
     if (argument === "--accept-source-terms") acceptSourceTerms = true;
+    else if (argument === "--allow-unavailable-assets")
+      allowUnavailableAssets = true;
     else if (argument === "--all") all = true;
     else if (argument === "--dry-run") dryRun = true;
     else if (argument.startsWith("--") && argument.includes("=")) {
@@ -172,6 +188,7 @@ function parseOptions(arguments_: string[]): Options {
   );
   return {
     acceptSourceTerms,
+    allowUnavailableAssets,
     all,
     concurrency: parsePositiveInteger(
       values.get("concurrency") ?? "2",
@@ -400,14 +417,20 @@ async function acquireLock(path: string): Promise<() => Promise<void>> {
   };
 }
 
-function createManifest(items: ManifestItem[]): RightsManifest {
+function createManifest(
+  items: ManifestItem[],
+  unavailableAssets: readonly UnavailableAsset[],
+): RightsManifest {
   const now = new Date().toISOString();
   return {
     schema_version: 1,
     dataset_id: "thefusion21-pokemoncards-noncommercial-scrape-v1",
     created_at: now,
-    description:
-      "Locally collected, bounded visual-retrieval experiment. Source assets, model weights, and indexes remain outside Git and are not a public release.",
+    description: `${items.length} locally collected, bounded visual-retrieval references${
+      unavailableAssets.length > 0
+        ? `; ${unavailableAssets.length} declared source assets were unavailable and are recorded in intake-report.json`
+        : ""
+    }. Source assets, model weights, and indexes remain outside Git and are not a public release.`,
     intended_use:
       "Local non-commercial visual-retrieval experiment only; public model, index, and asset distribution remain disabled.",
     sources: [
@@ -439,6 +462,44 @@ function createManifest(items: ManifestItem[]): RightsManifest {
     ],
     items,
   };
+}
+
+export function selectCollectedItems(
+  cards: readonly FusionCardRow[],
+  completed: Readonly<Record<string, ManifestItem>>,
+  failures: readonly DownloadFailure[],
+  allowUnavailableAssets: boolean,
+): { items: ManifestItem[]; unavailableAssets: UnavailableAsset[] } {
+  const failureByCardId = new Map(
+    failures.map((failure) => [failure.cardId, failure.reason]),
+  );
+  const items: ManifestItem[] = [];
+  const unavailableAssets: UnavailableAsset[] = [];
+  for (const card of cards) {
+    const item = completed[card.id];
+    if (item) {
+      items.push(item);
+      continue;
+    }
+    const reason = failureByCardId.get(card.id);
+    if (!reason) {
+      throw new Error(
+        `missing completed item without a failure record for ${card.id}`,
+      );
+    }
+    unavailableAssets.push({ card, reason });
+  }
+  if (unavailableAssets.length > 0 && !allowUnavailableAssets) {
+    throw new Error(
+      `${unavailableAssets.length} downloads failed; state was saved for a safe retry. First failure: ${unavailableAssets[0]!.card.id}: ${unavailableAssets[0]!.reason}`,
+    );
+  }
+  if (items.length < 2) {
+    throw new Error(
+      "fewer than two verified reference cards remain after unavailable assets",
+    );
+  }
+  return { items, unavailableAssets };
 }
 
 async function downloadCard(
@@ -594,9 +655,9 @@ async function main(): Promise<void> {
     assertReusableState(state, sourceHash, options, selection.available);
     await writeAtomically(statePath, `${JSON.stringify(state, null, 2)}\n`);
 
-    const failures: Array<{ cardId: string; reason: string }> = [];
-    const itemByCardId = new Map(
-      selection.cards.map((card) => [card.id, card]),
+    const failures: DownloadFailure[] = [];
+    const cardByItemId = new Map(
+      selection.cards.map((card) => [`fusion:${fusionCardKey(card)}`, card]),
     );
     let downloadedBytes = 0;
     let reusedItems = 0;
@@ -661,18 +722,12 @@ async function main(): Promise<void> {
     );
     persistState();
     await stateWrite;
-    if (failures.length > 0) {
-      throw new Error(
-        `${failures.length} downloads failed; state was saved for a safe retry. First failure: ${failures[0]!.cardId}: ${failures[0]!.reason}`,
-      );
-    }
-
-    const items = selection.cards.map((card) => {
-      const item = state.completed[card.id];
-      if (!item || !itemByCardId.has(card.id))
-        throw new Error(`missing completed item for ${card.id}`);
-      return item;
-    });
+    const { items, unavailableAssets } = selectCollectedItems(
+      selection.cards,
+      state.completed,
+      failures,
+      options.allowUnavailableAssets,
+    );
     const manifestPath = resolve(
       options.outputDirectory,
       "rights-manifest.json",
@@ -680,7 +735,7 @@ async function main(): Promise<void> {
     const reportPath = resolve(options.outputDirectory, "intake-report.json");
     await writeAtomically(
       manifestPath,
-      `${JSON.stringify(createManifest(items), null, 2)}\n`,
+      `${JSON.stringify(createManifest(items, unavailableAssets), null, 2)}\n`,
     );
     await writeAtomically(
       reportPath,
@@ -696,18 +751,40 @@ async function main(): Promise<void> {
             last_modified: source.lastModified,
           },
           selection: state.selection,
+          collection: {
+            complete: unavailableAssets.length === 0,
+            collected_assets: items.length,
+            unavailable_assets: unavailableAssets.length,
+            unavailable_assets_allowed: options.allowUnavailableAssets,
+          },
           limits: {
             max_image_bytes: options.maxImageBytes,
             max_pixels: options.maxPixels,
             max_total_bytes: options.maxTotalBytes,
           },
           rejected_rows: selection.rejected satisfies RejectedFusionCardRow[],
-          items: selection.cards.map((card) => ({
+          items: items.map((item) => {
+            const card = cardByItemId.get(item.item_id);
+            if (!card)
+              throw new Error(`missing source card for ${item.item_id}`);
+            return {
+              card_id: card.id,
+              card_uid: item.card_uid,
+              name: card.name,
+              set_id: card.setId,
+              image_url: card.imageUrl,
+              sha256: item.sha256,
+              observed_content_type:
+                state.observed_content_types?.[card.id] ?? null,
+            };
+          }),
+          unavailable_assets: unavailableAssets.map(({ card, reason }) => ({
             card_id: card.id,
+            card_uid: `tcg:${fusionCardKey(card)}`,
+            name: card.name,
+            set_id: card.setId,
             image_url: card.imageUrl,
-            sha256: state.completed[card.id]!.sha256,
-            observed_content_type:
-              state.observed_content_types?.[card.id] ?? null,
+            reason,
           })),
         },
         null,
@@ -718,6 +795,7 @@ async function main(): Promise<void> {
       `${JSON.stringify(
         {
           cards: items.length,
+          unavailable_assets: unavailableAssets.length,
           downloaded_bytes: downloadedBytes,
           manifest: manifestPath,
           report: reportPath,
@@ -733,8 +811,13 @@ async function main(): Promise<void> {
   }
 }
 
-void main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`scrape-pokemon-cards: ${message}\n`);
-  process.exitCode = 2;
-});
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  void main().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`scrape-pokemon-cards: ${message}\n`);
+    process.exitCode = 2;
+  });
+}

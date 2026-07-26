@@ -23,8 +23,8 @@ décisions OCR antérieures.
   ne les ajoute jamais à Git, et produit un manifeste vérifiable avant tout
   entraînement hors ligne.
 - **D5 — Reconnaissance.** Le chemin cible est `photo guidée -> correction
-  locale -> Web Worker ONNX/WASM -> embedding L2 128D -> API TypeScript top-5
-  dans un index INT8 -> confiance ou abstention -> confirmation humaine`.
+locale -> Web Worker ONNX/WASM -> embedding L2 128D -> API TypeScript top-5
+dans un index INT8 -> confiance ou abstention -> confirmation humaine`.
   Aucune OCR n'est une preuve d'identité.
 - **D6 — Vie privée et capacité.** Le navigateur ne transmet pas de photo au
   chemin de retrieval. L'API valide uniquement un vecteur borné et cherche dans
@@ -41,6 +41,20 @@ décisions OCR antérieures.
 - **D9 — Vérité produit.** Tant que les gates ne passent pas, la recherche
   catalogue manuelle est le fallback honnête. Le produit ne prétend ni
   authentifier ni grader une carte.
+- **D10 — Bundle de service vérifiable.** Une release servable est un bundle
+  immuable composé du modèle ONNX, de l’index INT8, d’un mapping
+  `card_uid -> cardId` du catalogue, de la calibration, du rapport de
+  benchmark et d’un manifeste de diffusion. Le Worker et l’API refusent le
+  bundle lorsque les SHA-256, les dimensions, la licence, les mappings ou les
+  gates de benchmark divergent. L’artefact local CC-BY-NC actuel ne satisfait
+  pas ces conditions et reste donc refusé.
+- **D11 — Contrat sans photo ni OCR.** Le Worker reproduit le prétraitement
+  RGB du modèle (orientation, letterbox gris, 224×224, normalisation
+  ImageNet), produit un vecteur L2 128D, puis l’API TypeScript ne reçoit que
+  ce vecteur borné et retourne au plus cinq `cardId` métier avec score,
+  marge, version et abstention. Le chemin Tesseract, son endpoint photo et
+  ses dépendances ne constituent pas de fallback et doivent être retirés lors
+  de l’intégration. La confirmation humaine reste obligatoire.
 
 ## Hors périmètre
 
