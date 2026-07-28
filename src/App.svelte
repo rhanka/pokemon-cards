@@ -397,7 +397,7 @@
     }
     let bootstrap = generation === null;
     let requireEmpty = options.requireEmptyForFirstWrite === true;
-    let hasMore = false;
+    let hasMore: boolean;
     let page = 0;
     do {
       options.signal?.throwIfAborted();
@@ -517,7 +517,7 @@
     if (generation === null) throw new AccountQueueMissingGenerationError();
     const remoteIds: string[] = [];
     let cursor = "0";
-    let hasMore = false;
+    let hasMore: boolean;
     let page = 0;
     do {
       signal?.throwIfAborted();

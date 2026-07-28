@@ -406,7 +406,9 @@ async function acquireLock(path: string): Promise<() => Promise<void>> {
     );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new Error(`collector lock already exists: ${path}`);
+      throw new Error(`collector lock already exists: ${path}`, {
+        cause: error,
+      });
     }
     throw error;
   }
