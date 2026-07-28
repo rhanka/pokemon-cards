@@ -52,6 +52,62 @@ def test_should_reject_invalid_ratios() -> None:
         SplitConfig(train=0.8, validation=0.15, test=0.1)
 
 
+def test_should_keep_a_phone_capture_group_in_one_partition() -> None:
+    manifest = load_rights_manifest(FIXTURE)
+    template = manifest.items[0]
+    first = replace(
+        template,
+        item_id="capture-a",
+        card_uid="fixture:uid-a",
+        role="capture",
+        capture_group="phone-session-1",
+    )
+    second = replace(
+        template,
+        item_id="capture-b",
+        card_uid="fixture:uid-b",
+        role="capture",
+        capture_group="phone-session-1",
+    )
+    seed = next(
+        candidate
+        for candidate in range(10_000)
+        if assign_uid(first.card_uid, SplitConfig(seed=candidate))
+        != assign_uid(second.card_uid, SplitConfig(seed=candidate))
+    )
+
+    with pytest.raises(ValueError, match="capture group.*leaks"):
+        split_items((first, second), SplitConfig(seed=seed))
+
+
+def test_should_not_allow_a_capture_session_to_cross_roles_or_partitions() -> None:
+    manifest = load_rights_manifest(FIXTURE)
+    template = manifest.items[0]
+    capture = replace(
+        template,
+        item_id="capture-a",
+        card_uid="fixture:uid-a",
+        role="capture",
+        capture_group="phone-session-1",
+    )
+    unknown = replace(
+        template,
+        item_id="unknown-b",
+        card_uid="fixture:uid-b",
+        role="unknown",
+        capture_group="phone-session-1",
+    )
+    seed = next(
+        candidate
+        for candidate in range(10_000)
+        if assign_uid(capture.card_uid, SplitConfig(seed=candidate))
+        != assign_uid(unknown.card_uid, SplitConfig(seed=candidate))
+    )
+
+    with pytest.raises(ValueError, match="capture group.*leaks"):
+        split_items((capture, unknown), SplitConfig(seed=seed))
+
+
 def test_should_change_assignments_when_seed_changes() -> None:
     assignments_a = [assign_uid(f"fixture:{index}", SplitConfig(seed=1)) for index in range(100)]
     assignments_b = [assign_uid(f"fixture:{index}", SplitConfig(seed=2)) for index in range(100)]

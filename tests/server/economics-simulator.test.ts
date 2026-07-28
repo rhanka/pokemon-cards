@@ -39,30 +39,27 @@ describe("economics simulator", () => {
     expect(active?.peakExceedsCpuLimit).toBe(true);
   });
 
-  it("should calculate paid and all-account normalized storage separately", () => {
+  it("should calculate central normalized storage for every enrolled account", () => {
     const report = simulateEconomics();
     const base = report.scenarios.find((scenario) => scenario.id === "base");
 
-    expect(report.economics.paidAccounts).toBe(300);
-    expect(base?.paidStorage.holdings).toBe(300_000);
-    expect(base?.paidStorage.mutationsOverRetention).toBe(150_000);
-    expect(base?.paidStorage.normalizedEventBytes).toBe(285_000_000);
     expect(base?.allAccountStorage.holdings).toBe(1_000_000);
     expect(base?.allAccountStorage.normalizedEventBytes).toBe(950_000_000);
-    expect(base?.paidStorage.primaryGiB).toBeLessThan(1);
     expect(base?.allAccountStorage.primaryGiB).toBeGreaterThan(1);
     expect(base?.monthlyOptimizedRequests).toBe(11_000);
-    expect(base?.maximumBlendedStorageUsdPerGiBMonth).toBeLessThan(1);
+    expect(base?.allocatedComputeCostUsd).toBeGreaterThan(0);
   });
 
-  it("should preserve the five-year price and maximum-markup guardrail", () => {
-    const { economics } = simulateEconomics();
+  it("should model the pilot as free and non-commercial", () => {
+    const { sustainability } = simulateEconomics();
 
-    expect(economics.revenueUsd).toBeCloseTo(1_497, 8);
-    expect(economics.processorCostUsd).toBeCloseTo(133.413, 3);
-    expect(economics.completeCostAtMarkupCeilingUsd).toBeCloseTo(998, 8);
-    expect(economics.marginAtMarkupCeilingUsd).toBeCloseTo(499, 8);
-    expect(economics.infrastructureBudgetUsd).toBe(180);
+    expect(sustainability.serviceModel).toBe("free-noncommercial");
+    expect(sustainability.checkoutEnabled).toBe(false);
+    expect(sustainability.sharedNodeFiveYearCostUsd).toBeCloseTo(2853.18, 8);
+    expect(sustainability.requestedCpuFiveYearAttributionUsd).toBeCloseTo(
+      31.702,
+      3,
+    );
   });
 
   it("should scale account-dependent load without duplicating the global refresh universe", () => {
@@ -81,7 +78,7 @@ describe("economics simulator", () => {
     expect(baseAtHundredThousand?.dailyGlobalRefreshCalls).toBe(
       baseAtThousand?.dailyGlobalRefreshCalls,
     );
-    expect(baseAtHundredThousand?.paidStorage.holdings).toBe(30_000_000);
+    expect(baseAtHundredThousand?.allAccountStorage.holdings).toBe(100_000_000);
   });
 
   it("should reject an impossible CPU contract", () => {

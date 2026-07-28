@@ -5,11 +5,12 @@ metadata:
   labels:
     app.kubernetes.io/name: pokemon-cards
 spec:
-  storageClassName: sbs-default
+  # Provider-neutral name. On OVH BHS5 this is backed by Cinder classic; a
+  # source-cluster rollback uses the Scaleway overlay instead. A bound PVC is
+  # immutable, so this only applies to a newly restored target volume.
+  storageClassName: block-standard
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
       storage: 4Gi
-# This base currently targets the authorised Scaleway POC contract. A future
-# OVH overlay must replace this value only after its storage mapping is live.

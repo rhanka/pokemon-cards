@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseCardText } from "../../shared/card-text";
 
 describe("card text parser", () => {
-  it("should extract the printed name and collector number from noisy OCR lines", () => {
+  it("should extract the printed name and collector number from noisy text lines", () => {
     const result = parseCardText([
       { text: "BASIC", confidence: 96 },
       { text: "Pikachu", confidence: 94 },

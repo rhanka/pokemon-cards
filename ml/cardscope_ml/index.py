@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
 from .errors import DependencyUnavailableError
 from .inference import preprocess_onnx
 from .report import write_canonical_json
-from .rights import Operation, load_rights_manifest
+from .rights import Operation, load_rights_manifest, require_training_operation
 
 
 def build_reference_index(
@@ -20,15 +21,34 @@ def build_reference_index(
     model_path: str | Path,
     output_dir: str | Path,
     release: bool = False,
+    operation: Operation | str = Operation.TRAIN,
 ) -> dict[str, Any]:
+    training_operation = require_training_operation(operation)
     np, ort = _index_stack()
     manifest = load_rights_manifest(manifest_path)
-    manifest.assert_allowed(Operation.PUBLISH_MODEL if release else Operation.TRAIN)
+    manifest.assert_allowed(Operation.PUBLISH_MODEL if release else training_operation)
     manifest.verify_assets(asset_root, roles={"reference"})
     references = sorted(
         (item for item in manifest.items if item.role == "reference"),
         key=lambda item: (item.card_uid, item.item_id),
     )
+    export_metadata = _load_export_metadata(Path(model_path))
+    if export_metadata.get("manifest_fingerprint") != manifest.fingerprint:
+        raise ValueError("export and rights manifest fingerprints differ")
+    model_hash = _sha256(Path(model_path))
+    known_model_hashes = {
+        export_metadata.get("float_onnx_sha256"),
+        export_metadata.get("int8_onnx_sha256"),
+    }
+    if model_hash not in known_model_hashes:
+        raise ValueError("export metadata does not match the supplied ONNX model")
+    runtime_model = export_metadata.get("runtime_model")
+    if runtime_model and Path(model_path).name != runtime_model:
+        raise ValueError("supplied ONNX model is not the export's selected runtime model")
+    if export_metadata.get("training_rights_operation", Operation.TRAIN.value) != training_operation.value:
+        raise ValueError("export and requested training rights operations differ")
+    if release and training_operation is not Operation.TRAIN:
+        raise ValueError("an experimental export cannot be indexed for release")
     session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
     input_name = session.get_inputs()[0].name
     output_name = session.get_outputs()[0].name
@@ -70,6 +90,8 @@ def build_reference_index(
         "dimension": 128,
         "count": len(entries),
         "bytes": binary_path.stat().st_size,
+        "training_rights_operation": training_operation.value,
+        "local_only": training_operation is Operation.TRAIN_NONCOMMERCIAL_EXPERIMENT,
         "release_rights_checked": release,
         "entries": entries,
     }
@@ -86,6 +108,19 @@ def _index_stack() -> tuple[Any, Any]:
             "reference indexing requires NumPy and ONNX Runtime; install cardscope-ml[export]"
         ) from exc
     return np, ort
+
+
+def _load_export_metadata(model_path: Path) -> dict[str, Any]:
+    metadata_path = model_path.parent / "export-metadata.json"
+    try:
+        raw = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ValueError(f"missing export metadata beside ONNX model: {metadata_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid export metadata: {metadata_path}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("export metadata must be a JSON object")
+    return raw
 
 
 def _sha256(path: Path) -> str:

@@ -9,7 +9,6 @@ import type {
   ParsedCardText,
   PriceQuote,
   RuntimeConfig,
-  ServerRecognitionResult,
   ValuationPreference,
 } from "./types";
 import { selectPriceQuote } from "./value";
@@ -24,8 +23,7 @@ const defaultConfig: RuntimeConfig = {
   appName: "CardScope",
   recognition: {
     enabled: false,
-    processing: "server",
-    maxImageBytes: 2 * 1024 * 1024,
+    processing: "browser-vector",
   },
   auth: { enabled: false, scope: "openid profile email" },
   sync: {
@@ -415,13 +413,7 @@ function parseRuntimeConfig(input: unknown): RuntimeConfig {
         recognition.enabled === undefined
           ? defaultConfig.recognition.enabled
           : Boolean(recognition.enabled),
-      processing: "server",
-      maxImageBytes:
-        typeof recognition.maxImageBytes === "number"
-          ? recognition.maxImageBytes
-          : typeof recognition.max_image_bytes === "number"
-            ? recognition.max_image_bytes
-            : defaultConfig.recognition.maxImageBytes,
+      processing: "browser-vector",
     },
     auth: {
       enabled: Boolean(auth.enabled),
@@ -476,35 +468,6 @@ export async function loadRuntimeConfig(): Promise<RuntimeConfig> {
   } catch {
     return cachedRuntimeConfig() ?? defaultConfig;
   }
-}
-
-export async function recognizeCardImage(
-  image: Blob,
-  locale: Locale,
-  signal?: AbortSignal,
-): Promise<ServerRecognitionResult> {
-  const params = new URLSearchParams({ language: "auto" });
-  const deadline = AbortSignal.timeout(40_000);
-  const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
-  const response = await apiFetch(
-    `/api/recognition/cards?${params.toString()}`,
-    {
-      method: "POST",
-      headers: { "content-type": "image/jpeg" },
-      body: image,
-      signal: requestSignal,
-    },
-  );
-  const raw = (await response.json()) as Omit<
-    ServerRecognitionResult,
-    "cards"
-  > & { cards?: unknown[] };
-  return {
-    ...raw,
-    cards: (Array.isArray(raw.cards) ? raw.cards : [])
-      .map((card) => normalizeCard(card, locale))
-      .filter((card): card is CatalogCard => card !== null),
-  };
 }
 
 export async function searchCatalog(

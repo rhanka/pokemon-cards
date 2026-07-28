@@ -11,7 +11,7 @@ from .errors import DependencyUnavailableError
 from .inference import preprocess_onnx
 from .model import load_checkpoint
 from .report import write_canonical_json
-from .rights import ImageItem, Operation, load_rights_manifest
+from .rights import ImageItem, Operation, load_rights_manifest, require_training_operation
 
 
 def export_onnx_int8(
@@ -22,10 +22,14 @@ def export_onnx_int8(
     output_dir: str | Path,
     calibration_samples: int = 128,
     release: bool = False,
+    operation: Operation | str = Operation.TRAIN,
 ) -> dict[str, Any]:
+    if calibration_samples <= 0:
+        raise ValueError("calibration_samples must be positive")
+    training_operation = require_training_operation(operation)
     torch, np, onnx, ort, quantization = _export_stack()
     manifest = load_rights_manifest(manifest_path)
-    manifest.assert_allowed(Operation.PUBLISH_MODEL if release else Operation.TRAIN)
+    manifest.assert_allowed(Operation.PUBLISH_MODEL if release else training_operation)
     candidates = sorted(
         (item for item in manifest.items if item.role in {"reference", "capture"}),
         key=lambda item: (item.card_uid, item.item_id),
@@ -36,6 +40,11 @@ def export_onnx_int8(
     model, checkpoint = load_checkpoint(str(checkpoint_path), device="cpu")
     if checkpoint["manifest_fingerprint"] != manifest.fingerprint:
         raise ValueError("checkpoint and rights manifest fingerprints differ")
+    checkpoint_operation = checkpoint.get("training_rights_operation", Operation.TRAIN.value)
+    if checkpoint_operation != training_operation.value:
+        raise ValueError("checkpoint and requested training rights operations differ")
+    if release and checkpoint_operation != Operation.TRAIN.value:
+        raise ValueError("an experimental checkpoint cannot be exported as a release")
     model.eval()
 
     destination = Path(output_dir)
@@ -52,6 +61,10 @@ def export_onnx_int8(
         dynamic_axes={"image": {0: "batch"}, "embedding": {0: "batch"}},
         opset_version=17,
         do_constant_folding=True,
+        # Keep the export stack bounded to the declared ONNX dependency set.
+        # PyTorch 2.7 otherwise switches to its dynamo exporter, which pulls an
+        # undeclared onnxscript dependency at runtime.
+        dynamo=False,
     )
     onnx.checker.check_model(onnx.load(str(float_path)))
 
@@ -100,10 +113,16 @@ def export_onnx_int8(
         "float_onnx_bytes": float_path.stat().st_size,
         "int8_onnx_bytes": int8_path.stat().st_size,
         "int8_at_most_5_mib": int8_path.stat().st_size <= 5 * 1024 * 1024,
+        "runtime_model": "model.float.onnx",
+        "runtime_model_sha256": _sha256(float_path),
+        "runtime_model_bytes": float_path.stat().st_size,
+        "runtime_model_at_most_5_mib": float_path.stat().st_size <= 5 * 1024 * 1024,
         "calibration_items": len(candidates),
         "mean_float_int8_cosine": sum(similarities) / len(similarities),
+        "training_rights_operation": training_operation.value,
+        "local_only": training_operation is Operation.TRAIN_NONCOMMERCIAL_EXPERIMENT,
         "release_rights_checked": release,
-        "quantization": "onnxruntime-static-qdq-uint8-activation-int8-weight",
+        "quantization": "onnxruntime-static-qdq-uint8-activation-int8-weight-diagnostic-only",
     }
     write_canonical_json(destination / "export-metadata.json", metadata)
     return metadata

@@ -169,7 +169,7 @@ describe("catalogue adapters", () => {
     expect(new Set(cards.map((card) => card.id)).size).toBe(2);
   });
 
-  it("should search TCGdex by collector number and set total when OCR has no usable name", async () => {
+  it("should search TCGdex by collector number and set total without a usable name", async () => {
     const fetchMock = vi.fn<typeof fetch>(
       async () =>
         new Response(
@@ -452,7 +452,7 @@ describe("catalogue service cache and fallback", () => {
     }
   });
 
-  it("should never persist a manual or OCR search phrase in a cache key", async () => {
+  it("should never persist a manual search phrase in a cache key", async () => {
     const store = new SqliteStore(":memory:");
     const service = new CatalogueService({
       primary: testAdapter("tcgdex", { search: vi.fn(async () => []) }),

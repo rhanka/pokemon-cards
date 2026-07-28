@@ -2,14 +2,14 @@
 
 ## Objective
 
-- [ ] Deliver a deployable mobile-first Svelte PWA that identifies Pokémon card printings, estimates sourced market value, and keeps an account-central collection with an IndexedDB offline cache and five-year history.
+- [ ] Deliver a free, non-commercial mobile-first Svelte PWA that identifies Pokémon card printings visually, estimates sourced market value, and keeps an account-central collection with an IndexedDB offline cache and five-year history.
 
 ## Scope / Guardrails
 
-- [x] Keep scan inference in the TypeScript service, transient in memory, and never persist or train on a photo.
+- [x] Keep scan inference in the browser/TypeScript path, transmit only a bounded embedding for retrieval, and never persist or train on a user photo.
 - [x] Infer card language through bilingual catalogue matching, keep ambiguous printing, finish, and condition user-confirmed, and never claim authentication or automated grading.
 - [x] Use only catalogue, price, code, dataset, and model assets with documented compatible provenance.
-- [x] Keep free-user marginal server cost near zero and cap paid price at complete cost plus 50%.
+- [x] Operate the pilot free and non-commercial, with no advertising, checkout, affiliate revenue, or margin target.
 - [x] Deploy the current POC to the live Scaleway path at 20m requested CPU; defer the OVH scale migration until its platform is operational.
 - [x] Keep all new product and code text in English; French is a supported UI locale.
 
@@ -112,3 +112,10 @@
   - [ ] Commit selectively without `.remote/**`, push `main`, and publish the immutable OCI digest.
   - [ ] Deploy through the owning Kubernetes lane and verify `https://pokemon.sent-tech.ca`.
   - [ ] Lot gate: clean tracked worktree, green CI, central-sync two-browser smoke, bilingual scan smoke, and rollback evidence.
+- [ ] Lot 11 — Rights-gated visual retrieval
+  - [x] Record the non-commercial/MIT decision, visual-retrieval study, and the separate licence boundary for code, data, and artefacts.
+  - [x] Add a bounded, idempotent TypeScript intake for `TheFusion21/PokemonCards`, with source/hash records outside Git and a fail-closed public-release policy.
+  - [ ] Train and benchmark only the local non-commercial experiment; collect independent phone captures and open-set probes.
+  - [ ] Build browser ONNX/Web Worker encoding and TypeScript embedding top-five lookup, with no Python runtime and no photo upload.
+  - [ ] Enable a visual model only after provenance, redistribution, accuracy, phone-performance, and public-release gates pass.
+  - [ ] Lot gate: exact artefacts/versioned report, two-phone benchmark, manual confirmation smoke, and public-release rights approval.

@@ -19,20 +19,18 @@ function fixed(value: number, digits = 2): string {
 }
 
 function renderReport(report: EconomicsReport): string {
-  const { inputs, economics, onboarding } = report;
+  const { inputs, sustainability, onboarding } = report;
   const lines = [
     "CardScope — simulation économique déterministe",
     "",
     `Cohorte: ${inputs.accounts} comptes × ${inputs.cardsPerAccount} cartes = ${onboarding.cards} cartes`,
-    `Cloud Pass: ${economics.paidAccounts} × $${fixed(inputs.passPriceUsd)} sur ${inputs.years} ans`,
+    "Pilote: gratuit, non commercial, sans checkout ni revenu",
     `CPU OCR mesuré: ${fixed(inputs.cpuSecondsPerScan)} CPU-s/scan; request ${inputs.cpuRequestMcpu}m; limit ${inputs.cpuLimitMcpu}m`,
     "",
-    "Économie sur cinq ans",
-    `  Revenu: $${fixed(economics.revenueUsd)}`,
-    `  Paiements: $${fixed(economics.processorCostUsd)}`,
-    `  Coût complet à +${inputs.maximumMarkupRate * 100}% maximum: $${fixed(economics.completeCostAtMarkupCeilingUsd)}`,
-    `  Marge correspondante: $${fixed(economics.marginAtMarkupCeilingUsd)}`,
-    `  Enveloppe infrastructure: $${fixed(economics.infrastructureBudgetUsd)}`,
+    "Capacité et coût sur cinq ans",
+    `  Modèle de service: ${sustainability.serviceModel}`,
+    `  Coût total du nœud partagé: $${fixed(sustainability.sharedNodeFiveYearCostUsd)}`,
+    `  Attribution indicative à ${inputs.cpuRequestMcpu}m: $${fixed(sustainability.requestedCpuFiveYearAttributionUsd)}`,
     "",
     `Onboarding de ${onboarding.cards} scans`,
     `  CPU total: ${fixed(onboarding.recognitionCpuHours)} heures`,
@@ -52,15 +50,13 @@ function renderReport(report: EconomicsReport): string {
       `    OCR ${fixed(scenario.averageRecognitionMcpu)}m moyen / ${fixed(scenario.peakRecognitionMcpu)}m pointe ×20; limit=${scenario.peakExceedsCpuLimit ? "DÉPASSÉE" : "OK"}`,
       `    Upstream ${fixed(scenario.monthlyUpstreamCalls, 0)}/mois, cache ${fixed(scenario.catalogueCacheHitRate * 100, 0)}%`,
       `    Stockage central (tous les comptes) ${fixed(scenario.allAccountStorage.primaryGiB)} GiB primaire / ${fixed(scenario.allAccountStorage.totalWithBackupsGiB)} GiB avec sauvegardes`,
-      `    Sous-ensemble payant ${fixed(scenario.paidStorage.primaryGiB)} GiB primaire (projection analytique, pas une gate de stockage)`,
       `    Coût CPU partagé alloué $${fixed(scenario.allocatedComputeCostUsd)} / ${inputs.years} ans`,
-      `    Plafond théorique stockage $${fixed(scenario.maximumBlendedStorageUsdPerGiBMonth, 3)}/GiB-mois avant egress/observabilité`,
     );
   }
 
   lines.push(
     "",
-    "Le taux de stockage maximal est un plafond budgétaire, pas un tarif fournisseur.",
+    "Les coûts affichés sont des attributions de capacité, pas un tarif utilisateur.",
     "Les consultations utilisent un delta global; une requête par carte est le scénario naïf à éviter.",
   );
   return `${lines.join("\n")}\n`;

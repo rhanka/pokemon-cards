@@ -8,22 +8,31 @@ kubectl apply --server-side --dry-run=server -k deploy/k8s/overlays/prod
 ```
 
 Production uses one replica and `Recreate` because the first tier uses SQLite
-on a 4 GiB ReadWriteOnce PVC. The authorised Scaleway contract explicitly uses
-the live `sbs-default` StorageClass. A future OVH overlay must replace it only
-after that cluster's portable storage mapping is active.
+on a 4 GiB ReadWriteOnce PVC. The base manifest uses the portable
+`block-standard` class; on OVH BHS5 it maps to Cinder Block Storage. The
+`scaleway` overlay retains `sbs-default` only for source-cluster rollback or a
+fresh Scaleway restore. A bound PVC is never retargeted in place.
 
 The `not-published` image tag in Git is a fail-closed render placeholder and is never pushed. Deployment automation accepts only a 40-character commit that is an ancestor of `origin/main`, resolves its `sha-<commit>` package, verifies the OCI revision label and GitHub build-provenance attestation, then replaces the placeholder with the registry digest. Before applying, it validates the namespace-scoped context, confirms the credential cannot create cluster-scoped RBAC, checks a fresh owner capacity approval and quota headroom, and performs a server-side dry-run.
 
-The protected GitHub `production` environment owns both `KUBE_CONFIG_DATA` and `CAPACITY_APPROVED_UNTIL` if CI deployment is later enabled. The current POC uses an owner-operated apply path instead. Immediately before either path, the operator must confirm at least the workload's explicit 20m CPU and 256Mi memory requests; the CPU request is intentionally small while the 300m limit permits short OCR bursts.
+The protected GitHub `production` environment owns both `KUBE_CONFIG_DATA` and
+`CAPACITY_APPROVED_UNTIL`. Its deployment workflow is intentionally pinned to
+OVH: the credential must be namespace-scoped for `pokemon-cards`, and the
+target must expose `block-standard` through the OVH Cinder provisioner. This
+prevents an old Scaleway credential from modifying the source PVC. Immediately
+before either the CI or owner-operated path, the operator must confirm at least
+the workload's explicit 20m CPU and 256Mi memory requests; the CPU request is
+intentionally small while the 300m limit permits ordinary catalogue and
+synchronization bursts.
 
 The workload release requires these owner-controlled gates:
 
 - the `pokemon-cards` namespace contract is applied;
 - at least 20m CPU and 256Mi requested memory are available on an eligible node;
 - the GHCR package is public or an approved pull secret exists;
-- the owner-operated path uses the verified live context, or, if CI deployment
-  is later enabled, `KUBE_CONFIG_DATA` contains the namespace-scoped kubeconfig
-  and `CAPACITY_APPROVED_UNTIL` records a fresh owner capacity check;
+- the owner-operated path uses the verified live OVH context, and the CI path
+  uses an OVH namespace-scoped `KUBE_CONFIG_DATA`; both require a fresh
+  `CAPACITY_APPROVED_UNTIL` owner capacity check;
 - `TCGDEX_CATALOG_ENABLED=true` is limited to the reviewed MIT catalogue metadata revision and its attribution;
 - `POKEMON_TCG_CATALOG_ENABLED`, `CARD_IMAGES_ENABLED`, and `MARKET_QUOTES_ENABLED` remain `false` until each separate rights record is approved;
 - DNS points `pokemon.sent-tech.ca` to the shared Traefik load balancer;
@@ -48,7 +57,13 @@ restore rehearsal are required before making a recoverable-backup or
 commercial five-year-retention claim; they do not block publishing the
 fail-closed scan service while `OIDC_REQUIRED=false`.
 
-The checked-in POC enables server recognition and TCGdex catalogue metadata.
+The OVH target needs a namespace-scoped kubeconfig, a fresh `block-standard`
+PVC restored from the source SQLite backup, and a TLS-ready ingress before DNS
+is switched. Keep the Scaleway record and PVC intact until an OVH browser/API
+smoke test and rollback rehearsal pass.
+
+The checked-in POC enables TCGdex catalogue metadata only. Visual recognition
+has no server image-upload fallback until a cleared browser bundle exists.
 Card images, marketplace quotes, and the secondary catalogue stay disabled
 until their separate rights gates pass. `OIDC_REQUIRED=false` is the
 fail-closed scan-only state while either identity or durability evidence is

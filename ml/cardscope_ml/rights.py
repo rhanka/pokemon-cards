@@ -40,10 +40,13 @@ _SOURCE_FIELDS = {
     "terms_url",
     "terms_verified_at",
     "commercial_use_allowed",
+    "noncommercial_use_allowed",
     "derivatives_allowed",
     "ml_training_allowed",
     "model_redistribution_allowed",
+    "noncommercial_model_redistribution_allowed",
     "asset_redistribution_allowed",
+    "upstream_rights_verified",
     "attribution",
     "notes",
 }
@@ -66,8 +69,30 @@ _ITEM_ROLES = {"reference", "capture", "unknown"}
 class Operation(str, Enum):
     INSPECT = "inspect"
     TRAIN = "train"
+    TRAIN_NONCOMMERCIAL_EXPERIMENT = "train-noncommercial-experiment"
     PUBLISH_MODEL = "publish-model"
+    PUBLISH_MODEL_NONCOMMERCIAL = "publish-model-noncommercial"
     PUBLISH_ASSETS = "publish-assets"
+
+
+TRAINING_OPERATIONS = frozenset(
+    {Operation.TRAIN, Operation.TRAIN_NONCOMMERCIAL_EXPERIMENT}
+)
+
+
+def require_training_operation(operation: Operation | str) -> Operation:
+    """Return one of the two operations that may create local model artifacts."""
+
+    try:
+        selected = operation if isinstance(operation, Operation) else Operation(operation)
+    except ValueError as exc:
+        raise ValueError(f"unsupported training operation: {operation!r}") from exc
+    if selected not in TRAINING_OPERATIONS:
+        raise ValueError(
+            "model building requires 'train' or 'train-noncommercial-experiment', "
+            f"not {selected.value!r}"
+        )
+    return selected
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,10 +108,13 @@ class SourceRights:
     terms_url: str
     terms_verified_at: str
     commercial_use_allowed: bool
+    noncommercial_use_allowed: bool
     derivatives_allowed: bool
     ml_training_allowed: bool
     model_redistribution_allowed: bool
+    noncommercial_model_redistribution_allowed: bool
     asset_redistribution_allowed: bool
+    upstream_rights_verified: bool
     attribution: str
     notes: str
 
@@ -130,13 +158,32 @@ class RightsManifest:
         if selected is Operation.INSPECT:
             return
 
-        required = [
-            ("commercial_use_allowed", "commercial use"),
-            ("derivatives_allowed", "derivative works"),
-            ("ml_training_allowed", "ML training"),
-        ]
+        if selected is Operation.TRAIN_NONCOMMERCIAL_EXPERIMENT:
+            required = [
+                ("noncommercial_use_allowed", "non-commercial use"),
+                ("derivatives_allowed", "derivative works"),
+                ("ml_training_allowed", "ML training"),
+            ]
+        else:
+            required = [
+                ("commercial_use_allowed", "commercial use"),
+                ("derivatives_allowed", "derivative works"),
+                ("ml_training_allowed", "ML training"),
+                ("upstream_rights_verified", "verified upstream rights"),
+            ]
         if selected is Operation.PUBLISH_MODEL:
             required.append(("model_redistribution_allowed", "model redistribution"))
+        elif selected is Operation.PUBLISH_MODEL_NONCOMMERCIAL:
+            required = [
+                ("noncommercial_use_allowed", "non-commercial use"),
+                ("derivatives_allowed", "derivative works"),
+                ("ml_training_allowed", "ML training"),
+                (
+                    "noncommercial_model_redistribution_allowed",
+                    "non-commercial model redistribution",
+                ),
+                ("upstream_rights_verified", "verified upstream rights"),
+            ]
         elif selected is Operation.PUBLISH_ASSETS:
             required.append(("asset_redistribution_allowed", "asset redistribution"))
 
@@ -278,10 +325,13 @@ def _parse_source(raw: Any, index: int) -> SourceRights:
     }
     for field in (
         "commercial_use_allowed",
+        "noncommercial_use_allowed",
         "derivatives_allowed",
         "ml_training_allowed",
         "model_redistribution_allowed",
+        "noncommercial_model_redistribution_allowed",
         "asset_redistribution_allowed",
+        "upstream_rights_verified",
     ):
         values[field] = _boolean(source[field], f"{path}.{field}")
     return SourceRights(**values)
