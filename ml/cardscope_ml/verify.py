@@ -26,6 +26,7 @@ def verify_reference_retrieval(
     output_path: str | Path,
     operation: Operation | str = Operation.TRAIN,
     seed: int = 20260722,
+    held_out_only: bool = False,
 ) -> dict[str, Any]:
     """Verify every catalog reference retrieves itself from a built local index.
 
@@ -101,6 +102,13 @@ def verify_reference_retrieval(
     }
     if train_uids.intersection(held_out_uids):
         raise ValueError("held-out reference UIDs overlap the training partition")
+    query_references = [
+        item
+        for item in references
+        if not held_out_only or partition_by_item_id[item.item_id] in {"validation", "test"}
+    ]
+    if not query_references:
+        raise ValueError("requested verification set has no reference queries")
     expected = [(item.card_uid, item.item_id) for item in references]
     indexed = [(entry.get("card_uid"), entry.get("item_id")) for entry in entries]
     if indexed != expected:
@@ -113,8 +121,11 @@ def verify_reference_retrieval(
         split_name: {"correct_top1": 0, "queries": 0}
         for split_name in ("train", "validation", "test")
     }
-    for start in range(0, len(references), 64):
-        batch = references[start : start + 64]
+    index_offset_by_item_id = {
+        item.item_id: offset for offset, item in enumerate(references)
+    }
+    for start in range(0, len(query_references), 64):
+        batch = query_references[start : start + 64]
         inputs = preprocess_onnx_batch(batch, asset_root=asset_root)
         embeddings = session.run([output_name], {input_name: inputs})[0]
         if embeddings.shape != (len(batch), dimension):
@@ -123,8 +134,8 @@ def verify_reference_retrieval(
                 f"({len(batch)}, {dimension})"
             )
         predictions = np.argmax(embeddings @ vectors.T, axis=1)
-        for position, (item, predicted) in enumerate(zip(batch, predictions, strict=True)):
-            expected_offset = start + position
+        for item, predicted in zip(batch, predictions, strict=True):
+            expected_offset = index_offset_by_item_id[item.item_id]
             correct += int(int(predicted) == expected_offset)
             split_name = partition_by_item_id[item.item_id]
             split_counts[split_name]["correct_top1"] += int(
@@ -139,16 +150,16 @@ def verify_reference_retrieval(
     )
     result = {
         "schema_version": 1,
-        "mode": "same-reference-retrieval-smoke",
+        "mode": "held-out-reference-retrieval" if held_out_only else "same-reference-retrieval-smoke",
         "manifest_fingerprint": manifest.fingerprint,
         "model_sha256": _sha256(model),
         "checkpoint_sha256": checkpoint_sha256,
         "export_metadata_sha256": export_metadata_sha256,
         "index_sha256": _sha256(binary_path),
         "training_rights_operation": training_operation.value,
-        "queries": len(references),
+        "queries": len(query_references),
         "correct_top1": correct,
-        "top1": _rate(correct, len(references)),
+        "top1": _rate(correct, len(query_references)),
         "split": {
             "seed": seed,
             "partitions": {
@@ -168,6 +179,7 @@ def verify_reference_retrieval(
             "held_out_uid_count": len(held_out_uids),
             "uid_overlap_with_training": 0,
             "query_mode": "canonical-reference-self-retrieval",
+            "query_partitions": ["validation", "test"],
             "scope": "catalogue generalization to UIDs excluded from training; not phone-capture performance",
         },
         "deployment_eligible": False,

@@ -119,6 +119,11 @@ that checkpoint to the exact ONNX runtime model and index. It is valid
 catalogue-generalisation evidence, but still not a camera-recognition
 benchmark.
 
+To regenerate only the meaningful catalogue holdout result without rereading
+the training references, invoke `cardscope-ml verify-artifacts` with
+`--held-out-only`; it evaluates validation and test UIDs only, while retaining
+the same checkpoint → ONNX → index integrity checks.
+
 For a zero-cost robustness diagnostic before field captures exist, add
 `--synthetic-holdout --synthetic-variants=2` to the builder. It creates
 in-memory perspective/glare/sleeve/blur/JPEG variants only from test UIDs that
