@@ -87,10 +87,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify.add_argument("--manifest", required=True)
     verify.add_argument("--asset-root", required=True)
+    verify.add_argument("--checkpoint", required=True)
     verify.add_argument("--model", required=True)
     verify.add_argument("--index", required=True)
     verify.add_argument("--output", required=True)
+    verify.add_argument("--seed", type=int, default=20260722)
     verify.add_argument("--operation", choices=TRAINING_OPERATION_CHOICES, default=Operation.TRAIN.value)
+
+    synthetic = subparsers.add_parser(
+        "synthetic-holdout", help="evaluate synthetic captures from held-out test UIDs"
+    )
+    synthetic.add_argument("--manifest", required=True)
+    synthetic.add_argument("--asset-root", required=True)
+    synthetic.add_argument("--checkpoint", required=True)
+    synthetic.add_argument("--model", required=True)
+    synthetic.add_argument("--index", required=True)
+    synthetic.add_argument("--output", required=True)
+    synthetic.add_argument("--seed", type=int, default=20260722)
+    synthetic.add_argument("--variants-per-reference", type=int, default=1)
+    synthetic.add_argument(
+        "--operation", choices=TRAINING_OPERATION_CHOICES, default=Operation.TRAIN.value
+    )
     return parser
 
 
@@ -168,6 +185,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 release=args.release,
                 operation=args.operation,
             )
+        elif args.command == "synthetic-holdout":
+            from .verify import verify_synthetic_holdout_retrieval
+
+            payload = verify_synthetic_holdout_retrieval(
+                manifest_path=args.manifest,
+                asset_root=args.asset_root,
+                checkpoint_path=args.checkpoint,
+                model_path=args.model,
+                index_path=args.index,
+                output_path=args.output,
+                seed=args.seed,
+                variants_per_reference=args.variants_per_reference,
+                operation=args.operation,
+            )
         elif args.command == "build-index":
             from .index import build_reference_index
 
@@ -185,10 +216,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             payload = verify_reference_retrieval(
                 manifest_path=args.manifest,
                 asset_root=args.asset_root,
+                checkpoint_path=args.checkpoint,
                 model_path=args.model,
                 index_path=args.index,
                 output_path=args.output,
                 operation=args.operation,
+                seed=args.seed,
             )
         else:  # pragma: no cover - argparse prevents this branch
             parser.error(f"unknown command {args.command!r}")

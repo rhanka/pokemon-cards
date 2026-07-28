@@ -19,6 +19,8 @@ export interface ModelBuildOptions {
   python: string;
   resumeCheckpoint: string | null;
   seed: number;
+  syntheticHoldout: boolean;
+  syntheticVariants: number;
   workers: number;
 }
 
@@ -35,7 +37,7 @@ function usage(): never {
       "Options: --output=<ignored directory> --epochs=<1..200> --seed=<integer> --device=<auto|cpu|cuda>",
       "         --operation=<train|train-noncommercial-experiment> --python=<executable> --workers=<0..32>",
       "         --pretrained-backbone --freeze-backbone-epochs=<0..200> --resume-checkpoint=<model.last.pt>",
-      "         --export --index --benchmark --calibration-samples=<1..4096>",
+      "         --export --index --benchmark --synthetic-holdout --synthetic-variants=<1..8> --calibration-samples=<1..4096>",
       "This runner never accepts --release and never deploys or publishes an artifact.",
     ].join("\n"),
   );
@@ -79,12 +81,14 @@ export function parseModelBuildOptions(
   let exportOnnx = false;
   let index = false;
   let pretrainedBackbone = false;
+  let syntheticHoldout = false;
   for (const argument of arguments_) {
     if (argument === "--acknowledge-experimental-model")
       acknowledgeExperimentalModel = true;
     else if (argument === "--benchmark") benchmark = true;
     else if (argument === "--export") exportOnnx = true;
     else if (argument === "--index") index = true;
+    else if (argument === "--synthetic-holdout") syntheticHoldout = true;
     else if (argument === "--pretrained-backbone") pretrainedBackbone = true;
     else if (argument.startsWith("--") && argument.includes("=")) {
       const [key, value] = argument.slice(2).split("=", 2) as [string, string];
@@ -103,6 +107,7 @@ export function parseModelBuildOptions(
     "python",
     "resume-checkpoint",
     "seed",
+    "synthetic-variants",
     "workers",
   ]);
   if (
@@ -113,6 +118,10 @@ export function parseModelBuildOptions(
     usage();
   for (const key of values.keys()) if (!known.has(key)) usage();
   if (index && !exportOnnx) throw new Error("--index requires --export");
+  if (syntheticHoldout && !index)
+    throw new Error("--synthetic-holdout requires --index");
+  if (values.has("synthetic-variants") && !syntheticHoldout)
+    throw new Error("--synthetic-variants requires --synthetic-holdout");
 
   const operation = values.get("operation") ?? EXPERIMENTAL_OPERATION;
   if (operation !== "train" && operation !== EXPERIMENTAL_OPERATION) {
@@ -167,6 +176,12 @@ export function parseModelBuildOptions(
       ? resolve(cwd, values.get("resume-checkpoint")!)
       : null,
     seed: parseSeed(values.get("seed") ?? "20260722"),
+    syntheticHoldout,
+    syntheticVariants: parsePositiveInteger(
+      values.get("synthetic-variants") ?? "1",
+      "--synthetic-variants",
+      8,
+    ),
     workers: parseWorkers(values.get("workers")),
   };
 }
@@ -301,16 +316,48 @@ export function createModelBuildPlan(
         options.manifest,
         "--asset-root",
         options.assets,
+        "--checkpoint",
+        resolve(options.output, "model.pt"),
         "--model",
         resolve(options.output, "export", "model.float.onnx"),
         "--index",
         resolve(options.output, "index", "reference-index.json"),
         "--output",
         resolve(options.output, "reference-smoke.json"),
+        "--seed",
+        String(options.seed),
         "--operation",
         options.operation,
       ],
     });
+    if (options.syntheticHoldout) {
+      commands.push({
+        name: "synthetic-holdout",
+        args: [
+          "-m",
+          "cardscope_ml",
+          "synthetic-holdout",
+          "--manifest",
+          options.manifest,
+          "--asset-root",
+          options.assets,
+          "--checkpoint",
+          resolve(options.output, "model.pt"),
+          "--model",
+          resolve(options.output, "export", "model.float.onnx"),
+          "--index",
+          resolve(options.output, "index", "reference-index.json"),
+          "--output",
+          resolve(options.output, "synthetic-holdout.json"),
+          "--seed",
+          String(options.seed),
+          "--variants-per-reference",
+          String(options.syntheticVariants),
+          "--operation",
+          options.operation,
+        ],
+      });
+    }
   }
   return {
     commands,

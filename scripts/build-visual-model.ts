@@ -127,6 +127,7 @@ async function main(): Promise<void> {
       index_metadata: resolve(options.output, "index", "reference-index.json"),
       benchmark: resolve(options.output, "benchmark.json"),
       reference_smoke: resolve(options.output, "reference-smoke.json"),
+      synthetic_holdout: resolve(options.output, "synthetic-holdout.json"),
     })) {
       try {
         outputs[name] = await sha256(path);
