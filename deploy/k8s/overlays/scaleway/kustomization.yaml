@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: pokemon-cards
+resources:
+  - ../../base
+patches:
+  - target:
+      version: v1
+      kind: PersistentVolumeClaim
+      name: pokemon-cards-data
+    patch: |-
+      - op: replace
+        path: /spec/storageClassName
+        value: sbs-default

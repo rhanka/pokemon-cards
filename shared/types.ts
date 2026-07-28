@@ -181,11 +181,11 @@ export interface RecognitionCandidate {
   cardId: string;
   score: number;
   visualScore: number | null;
-  ocrScore: number | null;
   hashScore: number | null;
 }
 
-export interface OcrLine {
+/** A line entered or pasted by a collector for catalogue search. */
+export interface TextLine {
   text: string;
   confidence: number;
 }
@@ -200,22 +200,6 @@ export interface ParsedCardText {
   signals: string[];
 }
 
-export type RecognitionEvidence = Omit<ParsedCardText, "rawText">;
-
-export interface ServerRecognitionResult {
-  evidence: RecognitionEvidence;
-  cards: PokemonCard[];
-  visualMatches: Array<{
-    cardId: string;
-    similarity: number;
-    provider: "server-model";
-  }>;
-  engine: "tesseract" | "onnx";
-  modelVersion: string | null;
-  durationMs: number;
-  photoRetained: false;
-}
-
 export interface RecognitionResult {
   candidates: RecognitionCandidate[];
   acceptedCardId: string | null;
@@ -227,8 +211,7 @@ export interface RecognitionResult {
 export interface PublicAppConfig {
   recognition: {
     enabled: boolean;
-    processing: "server";
-    maxImageBytes: number;
+    processing: "browser-vector";
   };
   auth: {
     enabled: boolean;

@@ -1,4 +1,4 @@
-name: Deploy Scaleway POC
+name: Deploy OVH production
 
 on:
   workflow_dispatch:
@@ -73,7 +73,7 @@ jobs:
           kubectl kustomize deploy/k8s/overlays/prod > "$RENDERED_MANIFEST"
           grep -F "image: ghcr.io/rhanka/pokemon-cards@${IMAGE_DIGEST}" "$RENDERED_MANIFEST"
           printf 'RENDERED_MANIFEST=%s\n' "$RENDERED_MANIFEST" >> "$GITHUB_ENV"
-      - name: Preflight namespace, RBAC, and capacity
+      - name: Preflight OVH namespace, RBAC, storage, and capacity
         env:
           CAPACITY_APPROVED_UNTIL: ${{ vars.CAPACITY_APPROVED_UNTIL }}
         run: |
@@ -87,6 +87,13 @@ jobs:
           test "$APPROVAL_EPOCH" -le "$((NOW_EPOCH + 86400))"
 
           test "$(kubectl config view --minify -o jsonpath='{..namespace}')" = "pokemon-cards"
+          # Production deliberately targets OVH BHS5.  A namespace-scoped
+          # Scaleway credential must fail here rather than mutate its PVC.
+          test "$(kubectl get storageclass block-standard -o jsonpath='{.provisioner}')" = "cinder.csi.openstack.org"
+          EXISTING_PVC_CLASS="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.spec.storageClassName}' 2>/dev/null || true)"
+          if [ -n "$EXISTING_PVC_CLASS" ]; then
+            test "$EXISTING_PVC_CLASS" = "block-standard"
+          fi
           kubectl -n pokemon-cards get serviceaccount pokemon-cards >/dev/null
           kubectl auth can-i get deployments.apps -n pokemon-cards --quiet
           kubectl auth can-i patch deployments.apps -n pokemon-cards --quiet

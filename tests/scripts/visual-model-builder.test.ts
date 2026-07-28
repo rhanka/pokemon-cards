@@ -1,0 +1,144 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  createModelBuildPlan,
+  parseModelBuildOptions,
+} from "../../scripts/visual-model-builder-lib.js";
+
+describe("visual model builder", () => {
+  it("uses the experimental operation and never creates a release command by default", () => {
+    const options = parseModelBuildOptions(
+      [
+        "--acknowledge-experimental-model",
+        "--manifest=ml/data/demo/rights-manifest.json",
+        "--assets=ml/data/demo/assets",
+        "--output=/tmp/cardscope-model",
+        "--workers=4",
+        "--resume-checkpoint=ml/artifacts/previous/model.last.pt",
+        "--export",
+        "--index",
+      ],
+      "/repo",
+    );
+    const plan = createModelBuildPlan(options, { reference: 100 });
+
+    expect(options.operation).toBe("train-noncommercial-experiment");
+    expect(options.workers).toBe(4);
+    expect(options.resumeCheckpoint).toBe(
+      "/repo/ml/artifacts/previous/model.last.pt",
+    );
+    expect(plan.benchmarkPreflight).toBe("not-requested");
+    expect(plan.commands.map((command) => command.name)).toEqual([
+      "validate-manifest",
+      "train",
+      "export",
+      "build-index",
+      "verify-artifacts",
+    ]);
+    expect(plan.commands.flatMap((command) => command.args)).not.toContain(
+      "--release",
+    );
+    expect(plan.commands[1]!.args).toContain("train-noncommercial-experiment");
+    expect(plan.commands[1]!.args).toContain("--resume-checkpoint");
+    const verification = plan.commands.find(
+      (command) => command.name === "verify-artifacts",
+    );
+    expect(verification?.args).toEqual(
+      expect.arrayContaining([
+        "--checkpoint",
+        "/tmp/cardscope-model/model.pt",
+        "--seed",
+        "20260722",
+      ]),
+    );
+    expect(
+      plan.commands.find((command) => command.name === "build-index")?.args,
+    ).not.toContain("--checkpoint");
+  });
+
+  it("rejects an index without an export and preflights a reference-only benchmark", () => {
+    expect(() =>
+      parseModelBuildOptions(
+        [
+          "--acknowledge-experimental-model",
+          "--manifest=manifest.json",
+          "--assets=assets",
+          "--index",
+        ],
+        "/repo",
+      ),
+    ).toThrow("--index requires --export");
+
+    expect(() =>
+      parseModelBuildOptions(
+        [
+          "--acknowledge-experimental-model",
+          "--manifest=manifest.json",
+          "--assets=assets",
+          "--workers=33",
+        ],
+        "/repo",
+      ),
+    ).toThrow("--workers must be an integer between 0 and 32");
+
+    const options = parseModelBuildOptions(
+      [
+        "--acknowledge-experimental-model",
+        "--manifest=manifest.json",
+        "--assets=assets",
+        "--benchmark",
+      ],
+      "/repo",
+    );
+    expect(
+      createModelBuildPlan(options, { reference: 100 }).benchmarkPreflight,
+    ).toBe("missing-captures-or-unknowns");
+
+    expect(() =>
+      parseModelBuildOptions(
+        [
+          "--acknowledge-experimental-model",
+          "--manifest=manifest.json",
+          "--assets=assets",
+          "--synthetic-holdout",
+        ],
+        "/repo",
+      ),
+    ).toThrow("--synthetic-holdout requires --index");
+
+    expect(() =>
+      parseModelBuildOptions(
+        [
+          "--acknowledge-experimental-model",
+          "--manifest=manifest.json",
+          "--assets=assets",
+          "--synthetic-variants=2",
+        ],
+        "/repo",
+      ),
+    ).toThrow("--synthetic-variants requires --synthetic-holdout");
+  });
+
+  it("adds a held-out synthetic diagnostic only after the local index", () => {
+    const options = parseModelBuildOptions(
+      [
+        "--acknowledge-experimental-model",
+        "--manifest=manifest.json",
+        "--assets=assets",
+        "--output=/tmp/cardscope-model",
+        "--export",
+        "--index",
+        "--synthetic-holdout",
+        "--synthetic-variants=2",
+      ],
+      "/repo",
+    );
+    const plan = createModelBuildPlan(options, { reference: 100 });
+    const synthetic = plan.commands.at(-1);
+
+    expect(synthetic?.name).toBe("synthetic-holdout");
+    expect(synthetic?.args).toEqual(
+      expect.arrayContaining(["--variants-per-reference", "2"]),
+    );
+  });
+});

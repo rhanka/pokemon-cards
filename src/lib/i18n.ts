@@ -34,9 +34,11 @@ const en = {
   "scanner.photo": "Choose photo",
   "scanner.capture": "Capture card",
   "scanner.stop": "Close camera",
-  "scanner.processing": "Reading the card securely",
+  "scanner.processing": "Comparing the card securely",
   "scanner.searching": "Searching the catalogue",
-  "scanner.model": "Checking server recognition",
+  "scanner.model": "Comparing the card visually",
+  "scanner.visualUnavailable":
+    "Visual recognition is being verified. Search by name or collector number in the meantime.",
   "scanner.error":
     "This card could not be read. Try a sharper, glare-free photo.",
   "scanner.busy":
@@ -239,9 +241,11 @@ const fr: Record<TranslationKey, string> = {
   "scanner.photo": "Choisir une photo",
   "scanner.capture": "Photographier la carte",
   "scanner.stop": "Fermer la caméra",
-  "scanner.processing": "Lecture sécurisée de la carte",
+  "scanner.processing": "Comparaison sécurisée de la carte",
   "scanner.searching": "Recherche dans le catalogue",
-  "scanner.model": "Vérification par le service de reconnaissance",
+  "scanner.model": "Comparaison visuelle de la carte",
+  "scanner.visualUnavailable":
+    "La reconnaissance visuelle est en cours de vérification. Cherchez la carte par nom ou numéro en attendant.",
   "scanner.error":
     "Carte illisible. Essayez une photo plus nette et sans reflet.",
   "scanner.busy":

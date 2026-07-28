@@ -91,7 +91,7 @@ describe("recognition scoring", () => {
     expect(result.status).toBe("review");
   });
 
-  it("should match accents and small OCR spelling differences", () => {
+  it("should match accents and small glyph spelling differences", () => {
     expect(textSimilarity("Flabébé", "Flabebe")).toBe(1);
     expect(textSimilarity("Ninetales", "Ninetale5")).toBeGreaterThan(0.75);
   });

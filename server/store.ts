@@ -981,7 +981,7 @@ export class SqliteStore {
       );
     }
 
-    let expired = 0;
+    let expired: number;
     let evicted = 0;
     this.database.exec("BEGIN IMMEDIATE");
     try {
@@ -1087,8 +1087,8 @@ export class SqliteStore {
     const maxAccounts = options.maxAccounts ?? DEFAULT_MAX_ACCOUNTS;
     if (!Number.isSafeInteger(maxAccounts) || maxAccounts < 1)
       throw new Error("maxAccounts must be a positive integer");
-    let accountExisted = false;
-    let nextGeneration = 1;
+    let accountExisted: boolean;
+    let nextGeneration: number;
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const account = this.database

@@ -37,18 +37,6 @@ export function testConfig(databasePath = ":memory:"): RuntimeConfig {
       marketQuotesEnabled: true,
       languages: ["en", "fr"],
     },
-    recognition: {
-      enabled: true,
-      dataPath: "/tmp/cardscope-test-recognition-data",
-      maxImageBytes: 2 * 1024 * 1024,
-      maxPixels: 4_000_000,
-      normalizedMaxEdge: 1_600,
-      timeoutMs: 30_000,
-      idleTimeoutMs: 300_000,
-      rateLimitPerMinute: 10,
-      globalRateLimitPerMinute: 30,
-      maxConcurrentUploads: 4,
-    },
     oidc: {
       enabled: true,
       issuer: "https://auth.example",

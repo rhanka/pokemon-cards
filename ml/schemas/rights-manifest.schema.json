@@ -50,10 +50,13 @@
         "terms_url",
         "terms_verified_at",
         "commercial_use_allowed",
+        "noncommercial_use_allowed",
         "derivatives_allowed",
         "ml_training_allowed",
         "model_redistribution_allowed",
+        "noncommercial_model_redistribution_allowed",
         "asset_redistribution_allowed",
+        "upstream_rights_verified",
         "attribution",
         "notes"
       ],
@@ -83,10 +86,13 @@
         },
         "terms_verified_at": { "type": "string", "format": "date-time" },
         "commercial_use_allowed": { "type": "boolean" },
+        "noncommercial_use_allowed": { "type": "boolean" },
         "derivatives_allowed": { "type": "boolean" },
         "ml_training_allowed": { "type": "boolean" },
         "model_redistribution_allowed": { "type": "boolean" },
+        "noncommercial_model_redistribution_allowed": { "type": "boolean" },
         "asset_redistribution_allowed": { "type": "boolean" },
+        "upstream_rights_verified": { "type": "boolean" },
         "attribution": { "type": "string", "minLength": 1 },
         "notes": { "type": "string", "minLength": 1 }
       }
