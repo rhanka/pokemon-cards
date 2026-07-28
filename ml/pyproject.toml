@@ -31,6 +31,7 @@ export = [
   "onnxruntime>=1.18,<2",
 ]
 dev = [
+  "Pillow>=10.2,<12",
   "pytest>=8.2,<9",
 ]
 
