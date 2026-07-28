@@ -92,6 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--index", required=True)
     verify.add_argument("--output", required=True)
     verify.add_argument("--seed", type=int, default=20260722)
+    verify.add_argument("--held-out-only", action="store_true")
     verify.add_argument("--operation", choices=TRAINING_OPERATION_CHOICES, default=Operation.TRAIN.value)
 
     synthetic = subparsers.add_parser(
@@ -222,6 +223,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_path=args.output,
                 operation=args.operation,
                 seed=args.seed,
+                held_out_only=args.held_out_only,
             )
         else:  # pragma: no cover - argparse prevents this branch
             parser.error(f"unknown command {args.command!r}")
