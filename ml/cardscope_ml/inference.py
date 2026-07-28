@@ -46,14 +46,19 @@ def cosine_scores(probes: Any, gallery: Any) -> list[list[float]]:
 
 
 def preprocess_onnx(item: ImageItem, *, asset_root: str | Path) -> Any:
-    torch, Image, _ = _stack()
-    transform = evaluation_transform()
+    _, Image, _ = _stack()
     root = Path(asset_root).resolve()
     path = (root / item.relative_path).resolve()
     path.relative_to(root)
     with Image.open(path) as opened:
-        tensor = transform(opened.convert("RGB"))
-    return tensor.unsqueeze(0).numpy()
+        return preprocess_onnx_image(opened.convert("RGB"))
+
+
+def preprocess_onnx_image(image: Any) -> Any:
+    """Apply the production image transform to an in-memory probe image."""
+
+    transform = evaluation_transform()
+    return transform(image.convert("RGB")).unsqueeze(0).numpy()
 
 
 def _stack() -> tuple[Any, Any, Any]:

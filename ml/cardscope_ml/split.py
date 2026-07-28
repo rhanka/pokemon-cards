@@ -85,6 +85,7 @@ def split_items(
         fingerprint=fingerprint,
     )
     assert_uid_separation(result)
+    assert_capture_group_separation(result)
     return result
 
 
@@ -102,4 +103,28 @@ def assert_uid_separation(split: ManifestSplit) -> None:
             if previous != split_name:
                 raise ManifestError(
                     f"card UID {item.card_uid!r} leaks between {previous} and {split_name}"
+                )
+
+
+def assert_capture_group_separation(split: ManifestSplit) -> None:
+    """Keep real capture sessions and unknown probes out of more than one split.
+
+    A catalogue reference can legitimately share the generic
+    ``catalogue-reference`` capture group.  A phone-capture session, however,
+    can share glare, background, sleeve, and camera characteristics across
+    several different cards.  Letting it span train and evaluation would make
+    a UID-separated split look more independent than it is.
+    """
+
+    seen: dict[str, str] = {}
+    for split_name in SPLIT_NAMES:
+        for item in split.items(split_name):
+            if item.role not in {"capture", "unknown"}:
+                continue
+            key = item.capture_group
+            previous = seen.setdefault(key, split_name)
+            if previous != split_name:
+                raise ManifestError(
+                    f"capture group {item.capture_group!r} leaks "
+                    f"between {previous} and {split_name}"
                 )

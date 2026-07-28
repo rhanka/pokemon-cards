@@ -108,9 +108,23 @@ weights for local fine-tuning and records that origin in training metadata; omit
 the flag only for an intentionally random-initialized experiment.
 The current float ONNX artifact is below the 5 MiB runtime budget and is the
 selected retrieval model. Static INT8 is exported as a fidelity diagnostic only;
-it is not selected automatically. When `--index` is selected, the builder also reloads the ONNX model and verifies
-that every canonical reference retrieves itself from the generated index. This
-is only an artifact-integrity smoke test, not a camera-recognition benchmark.
+it is not selected automatically. When `--index` is selected, the builder also
+reloads the ONNX model and verifies that every canonical reference retrieves
+itself from the generated index. The resulting `reference-smoke.json` keeps the
+global artifact-integrity figure separate from `held_out_from_training`: the
+latter reports only validation and test UIDs, which are excluded from the
+training partition. The checkpoint is read again to prove its manifest, seed,
+operation, and split fingerprint match that report; export metadata then binds
+that checkpoint to the exact ONNX runtime model and index. It is valid
+catalogue-generalisation evidence, but still not a camera-recognition
+benchmark.
+
+For a zero-cost robustness diagnostic before field captures exist, add
+`--synthetic-holdout --synthetic-variants=2` to the builder. It creates
+in-memory perspective/glare/sleeve/blur/JPEG variants only from test UIDs that
+were excluded from learning, then reports Top-1 and Recall@5 separately in
+`synthetic-holdout.json`. It never writes derived images and is always marked
+non-deployable; it must not replace independent camera or unknown-card probes.
 An interrupted local run resumes deterministically with
 `--resume-checkpoint=<output>/model.last.pt` and the same manifest, seed, and
 epoch target; the builder rejects a checkpoint from a different split.
@@ -134,9 +148,11 @@ cardscope-ml build-index --manifest /data/rights.json --asset-root /data/assets 
 ```
 
 Training uses online batch-hard triplet mining. UIDs, never individual images, are assigned to
-train/validation/test by a stable SHA-256 partition. Validation and test galleries contain cleared
-reference images for their own unseen UIDs; their probes must be independent captures. Unknown
-probes are required to measure false accepts and calibrate abstention.
+train/validation/test by a stable SHA-256 partition. Capture groups may not
+cross split boundaries or roles, even when they contain different cards.
+Validation and test galleries contain cleared reference images for their
+own unseen UIDs; their probes must be independent captures. Unknown probes are
+required to measure false accepts and calibrate abstention.
 
 The export command produces an opset-17 float ONNX graph and performs static QDQ INT8 calibration
 with manifest assets. The reference index contains only sorted UIDs, item identifiers, provenance
