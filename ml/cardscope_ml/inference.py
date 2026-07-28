@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -57,8 +58,31 @@ def preprocess_onnx(item: ImageItem, *, asset_root: str | Path) -> Any:
 def preprocess_onnx_image(image: Any) -> Any:
     """Apply the production image transform to an in-memory probe image."""
 
-    transform = evaluation_transform()
-    return transform(image.convert("RGB")).unsqueeze(0).numpy()
+    return _onnx_transform()(image.convert("RGB")).unsqueeze(0).numpy()
+
+
+def preprocess_onnx_batch(
+    items: Sequence[ImageItem], *, asset_root: str | Path
+) -> Any:
+    """Apply the production transform once and stack a dynamic ONNX batch."""
+
+    _, Image, np = _stack()
+    root = Path(asset_root).resolve()
+    transform = _onnx_transform()
+    rows: list[Any] = []
+    for item in items:
+        path = (root / item.relative_path).resolve()
+        path.relative_to(root)
+        with Image.open(path) as opened:
+            rows.append(transform(opened.convert("RGB")).numpy())
+    if not rows:
+        raise ValueError("ONNX preprocessing batch must include at least one image")
+    return np.stack(rows, axis=0)
+
+
+@lru_cache(maxsize=1)
+def _onnx_transform() -> Any:
+    return evaluation_transform()
 
 
 def _stack() -> tuple[Any, Any, Any]:

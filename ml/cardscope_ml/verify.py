@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .augment import SyntheticAugmenter
-from .inference import preprocess_onnx, preprocess_onnx_image
+from .inference import preprocess_onnx_batch, preprocess_onnx_image
 from .report import write_canonical_json
 from .rights import Operation, load_rights_manifest, require_training_operation
 from .split import SplitConfig, split_manifest
@@ -113,18 +113,24 @@ def verify_reference_retrieval(
         split_name: {"correct_top1": 0, "queries": 0}
         for split_name in ("train", "validation", "test")
     }
-    for expected_offset, item in enumerate(references):
-        input_image = preprocess_onnx(item, asset_root=asset_root)
-        embedding = session.run([output_name], {input_name: input_image})[0][0]
-        if embedding.shape != (dimension,):
+    for start in range(0, len(references), 64):
+        batch = references[start : start + 64]
+        inputs = preprocess_onnx_batch(batch, asset_root=asset_root)
+        embeddings = session.run([output_name], {input_name: inputs})[0]
+        if embeddings.shape != (len(batch), dimension):
             raise ValueError(
-                f"model output dimension {embedding.shape} differs from index {dimension}"
+                f"model output shape {embeddings.shape} differs from expected "
+                f"({len(batch)}, {dimension})"
             )
-        predicted = int(np.argmax(vectors @ embedding))
-        correct += int(predicted == expected_offset)
-        split_name = partition_by_item_id[item.item_id]
-        split_counts[split_name]["correct_top1"] += int(predicted == expected_offset)
-        split_counts[split_name]["queries"] += 1
+        predictions = np.argmax(embeddings @ vectors.T, axis=1)
+        for position, (item, predicted) in enumerate(zip(batch, predictions, strict=True)):
+            expected_offset = start + position
+            correct += int(int(predicted) == expected_offset)
+            split_name = partition_by_item_id[item.item_id]
+            split_counts[split_name]["correct_top1"] += int(
+                int(predicted) == expected_offset
+            )
+            split_counts[split_name]["queries"] += 1
     held_out_correct = sum(
         split_counts[split_name]["correct_top1"] for split_name in ("validation", "test")
     )
