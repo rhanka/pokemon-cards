@@ -86,13 +86,16 @@ jobs:
           test "$APPROVAL_EPOCH" -gt "$NOW_EPOCH"
           test "$APPROVAL_EPOCH" -le "$((NOW_EPOCH + 86400))"
 
-          REQUESTS="$(kubectl create --dry-run=client --validate=false -f "$RENDERED_MANIFEST" -o json | jq -er '
-            select(.kind == "Deployment" and .metadata.name == "pokemon-cards")
-            | [.spec.template.spec.containers[]
-              | select(.name == "cardscope")
-              | .resources.requests.cpu, .resources.requests.memory]
-            | @tsv
-          ')"
+          REQUESTS="$(awk '
+            $1 == "name:" && $2 == "cardscope" { cardscope = 1 }
+            cardscope && $1 == "requests:" { requests = 1; next }
+            cardscope && requests && $1 == "cpu:" && !cpu { cpu = $2 }
+            cardscope && requests && $1 == "memory:" && !memory { memory = $2 }
+            END {
+              if (!cpu || !memory) exit 1
+              printf "%s\\t%s", cpu, memory
+            }
+          ' "$RENDERED_MANIFEST")"
           test "$REQUESTS" = $'20m\t256Mi'
 
           storage_mib() {
