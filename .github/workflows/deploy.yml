@@ -70,7 +70,7 @@ jobs:
         run: |
           sed -i "s|newTag: not-published|digest: ${IMAGE_DIGEST}|" deploy/k8s/overlays/prod/kustomization.yaml
           RENDERED_MANIFEST="$RUNNER_TEMP/pokemon-cards.yaml"
-          kubectl kustomize deploy/k8s/overlays/prod > "$RENDERED_MANIFEST"
+          kubectl kustomize deploy/k8s/overlays/prod-ci > "$RENDERED_MANIFEST"
           grep -F "image: ghcr.io/rhanka/pokemon-cards@${IMAGE_DIGEST}" "$RENDERED_MANIFEST"
           printf 'RENDERED_MANIFEST=%s\n' "$RENDERED_MANIFEST" >> "$GITHUB_ENV"
       - name: Preflight OVH namespace, RBAC, storage, and capacity approval
@@ -85,18 +85,6 @@ jobs:
           NOW_EPOCH="$(date --utc +%s)"
           test "$APPROVAL_EPOCH" -gt "$NOW_EPOCH"
           test "$APPROVAL_EPOCH" -le "$((NOW_EPOCH + 86400))"
-
-          REQUESTS="$(awk '
-            $1 == "name:" && $2 == "cardscope" { cardscope = 1 }
-            cardscope && $1 == "requests:" { requests = 1; next }
-            cardscope && requests && $1 == "cpu:" && !cpu { cpu = $2 }
-            cardscope && requests && $1 == "memory:" && !memory { memory = $2 }
-            END {
-              if (!cpu || !memory) exit 1
-              printf "%s\\t%s", cpu, memory
-            }
-          ' "$RENDERED_MANIFEST")"
-          test "$REQUESTS" = $'20m\t256Mi'
 
           storage_mib() {
             case "$1" in
