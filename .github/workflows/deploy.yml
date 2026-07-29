@@ -86,14 +86,26 @@ jobs:
           test "$APPROVAL_EPOCH" -gt "$NOW_EPOCH"
           test "$APPROVAL_EPOCH" -le "$((NOW_EPOCH + 86400))"
 
+          storage_mib() {
+            case "$1" in
+              *Ki) awk -v value="${1%Ki}" 'BEGIN { printf "%.0f\n", value / 1024 }' ;;
+              *Mi) printf '%s\n' "${1%Mi}" ;;
+              *Gi) awk -v value="${1%Gi}" 'BEGIN { printf "%.0f\n", value * 1024 }' ;;
+              *) return 1 ;;
+            esac
+          }
+
           test "$(kubectl config view --minify -o jsonpath='{..namespace}')" = "pokemon-cards"
-          # Production deliberately targets OVH BHS5.  A namespace-scoped
-          # Scaleway credential must fail here rather than mutate its PVC.
-          test "$(kubectl get storageclass block-standard -o jsonpath='{.provisioner}')" = "cinder.csi.openstack.org"
-          EXISTING_PVC_CLASS="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.spec.storageClassName}' 2>/dev/null || true)"
-          if [ -n "$EXISTING_PVC_CLASS" ]; then
-            test "$EXISTING_PVC_CLASS" = "block-standard"
-          fi
+          # The tenant deployment identity intentionally has no cluster-scoped
+          # RBAC. A restored, bound production PVC provides the required
+          # namespaced target proof: a Scaleway credential would expose its
+          # source class rather than the OVH `block-standard` claim.
+          EXISTING_PVC_CLASS="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.spec.storageClassName}')"
+          EXISTING_PVC_PHASE="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.status.phase}')"
+          EXISTING_PVC_CAPACITY="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.status.capacity.storage}')"
+          test "$EXISTING_PVC_CLASS" = "block-standard"
+          test "$EXISTING_PVC_PHASE" = "Bound"
+          test "$(storage_mib "$EXISTING_PVC_CAPACITY")" -ge 4096
           kubectl -n pokemon-cards get serviceaccount pokemon-cards >/dev/null
           kubectl auth can-i get deployments.apps -n pokemon-cards --quiet
           kubectl auth can-i patch deployments.apps -n pokemon-cards --quiet
