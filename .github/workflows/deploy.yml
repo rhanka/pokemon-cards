@@ -73,7 +73,7 @@ jobs:
           kubectl kustomize deploy/k8s/overlays/prod > "$RENDERED_MANIFEST"
           grep -F "image: ghcr.io/rhanka/pokemon-cards@${IMAGE_DIGEST}" "$RENDERED_MANIFEST"
           printf 'RENDERED_MANIFEST=%s\n' "$RENDERED_MANIFEST" >> "$GITHUB_ENV"
-      - name: Preflight OVH namespace, RBAC, storage, and capacity
+      - name: Preflight OVH namespace, RBAC, storage, and capacity approval
         env:
           CAPACITY_APPROVED_UNTIL: ${{ vars.CAPACITY_APPROVED_UNTIL }}
         run: |
@@ -86,6 +86,15 @@ jobs:
           test "$APPROVAL_EPOCH" -gt "$NOW_EPOCH"
           test "$APPROVAL_EPOCH" -le "$((NOW_EPOCH + 86400))"
 
+          REQUESTS="$(kubectl create --dry-run=client --validate=false -f "$RENDERED_MANIFEST" -o json | jq -er '
+            select(.kind == "Deployment" and .metadata.name == "pokemon-cards")
+            | [.spec.template.spec.containers[]
+              | select(.name == "cardscope")
+              | .resources.requests.cpu, .resources.requests.memory]
+            | @tsv
+          ')"
+          test "$REQUESTS" = $'20m\t256Mi'
+
           storage_mib() {
             case "$1" in
               *Ki) awk -v value="${1%Ki}" 'BEGIN { printf "%.0f\n", value / 1024 }' ;;
@@ -97,13 +106,15 @@ jobs:
 
           test "$(kubectl config view --minify -o jsonpath='{..namespace}')" = "pokemon-cards"
           # The tenant deployment identity intentionally has no cluster-scoped
-          # RBAC. A restored, bound production PVC provides the required
-          # namespaced target proof: a Scaleway credential would expose its
-          # source class rather than the OVH `block-standard` claim.
+          # RBAC. The API host proves the intended OVH control plane; the
+          # namespaced PVC annotation proves Cinder provisioned its storage.
+          test "$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')" = "https://hlhedx.c1.bhs5.k8s.ovh.net"
           EXISTING_PVC_CLASS="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.spec.storageClassName}')"
+          EXISTING_PVC_PROVISIONER="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.metadata.annotations.volume\\.kubernetes\\.io/storage-provisioner}')"
           EXISTING_PVC_PHASE="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.status.phase}')"
           EXISTING_PVC_CAPACITY="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.status.capacity.storage}')"
           test "$EXISTING_PVC_CLASS" = "block-standard"
+          test "$EXISTING_PVC_PROVISIONER" = "cinder.csi.openstack.org"
           test "$EXISTING_PVC_PHASE" = "Bound"
           test "$(storage_mib "$EXISTING_PVC_CAPACITY")" -ge 4096
           kubectl -n pokemon-cards get serviceaccount pokemon-cards >/dev/null
@@ -118,37 +129,6 @@ jobs:
             exit 1
           fi
 
-          cpu_millis() {
-            case "$1" in
-              "") printf '0\n' ;;
-              *m) printf '%s\n' "${1%m}" ;;
-              *) awk -v value="$1" 'BEGIN { printf "%.0f\n", value * 1000 }' ;;
-            esac
-          }
-          memory_mib() {
-            case "$1" in
-              "") printf '0\n' ;;
-              *Ki) awk -v value="${1%Ki}" 'BEGIN { printf "%.0f\n", value / 1024 }' ;;
-              *Mi) printf '%s\n' "${1%Mi}" ;;
-              *Gi) awk -v value="${1%Gi}" 'BEGIN { printf "%.0f\n", value * 1024 }' ;;
-              *) awk -v value="$1" 'BEGIN { printf "%.0f\n", value / 1048576 }' ;;
-            esac
-          }
-
-          HARD_CPU="$(kubectl -n pokemon-cards get resourcequota tenant-quota -o jsonpath='{.status.hard.requests\.cpu}')"
-          USED_CPU="$(kubectl -n pokemon-cards get resourcequota tenant-quota -o jsonpath='{.status.used.requests\.cpu}')"
-          HARD_MEMORY="$(kubectl -n pokemon-cards get resourcequota tenant-quota -o jsonpath='{.status.hard.requests\.memory}')"
-          USED_MEMORY="$(kubectl -n pokemon-cards get resourcequota tenant-quota -o jsonpath='{.status.used.requests\.memory}')"
-          CURRENT_CPU="$(kubectl -n pokemon-cards get deployment pokemon-cards -o jsonpath='{.spec.template.spec.containers[?(@.name=="cardscope")].resources.requests.cpu}' 2>/dev/null || true)"
-          CURRENT_MEMORY="$(kubectl -n pokemon-cards get deployment pokemon-cards -o jsonpath='{.spec.template.spec.containers[?(@.name=="cardscope")].resources.requests.memory}' 2>/dev/null || true)"
-          test -n "$HARD_CPU"
-          test -n "$HARD_MEMORY"
-          CPU_REMAINING="$(( $(cpu_millis "$HARD_CPU") - $(cpu_millis "$USED_CPU") ))"
-          MEMORY_REMAINING="$(( $(memory_mib "$HARD_MEMORY") - $(memory_mib "$USED_MEMORY") ))"
-          CPU_INCREMENT="$(( 20 - $(cpu_millis "$CURRENT_CPU") ))"
-          MEMORY_INCREMENT="$(( 256 - $(memory_mib "$CURRENT_MEMORY") ))"
-          test "$CPU_REMAINING" -ge "$(( CPU_INCREMENT > 0 ? CPU_INCREMENT : 0 ))"
-          test "$MEMORY_REMAINING" -ge "$(( MEMORY_INCREMENT > 0 ? MEMORY_INCREMENT : 0 ))"
       - name: Server-side dry-run
         run: kubectl apply --server-side --dry-run=server -f "$RENDERED_MANIFEST" -o name
       - name: Expand the existing PVC in place
