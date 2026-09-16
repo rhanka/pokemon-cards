@@ -38,9 +38,11 @@ disabled in Kubernetes.
   are both proven. Startup also requires explicit
   `ACCOUNT_IDENTITY_READY=true` and `ACCOUNT_RECOVERY_READY=true` attestations
   before identity-backed sync can be enabled.
-- One OCI image and one Kubernetes Deployment, Service, Ingress, NetworkPolicy,
+- One OCI image and one Kubernetes Deployment, Service, NetworkPolicy,
   and 4 GiB Scaleway `sbs-default` PVC; a future OVH overlay must provide its
   own validated mapping.
+- Platform-owned Ingress and TLS in the `keda` namespace route public traffic
+  through the KEDA HTTP interceptor, which wakes the application from zero replicas.
 
 There is no Python service or Python runtime in the application image. The optional `ml/` Python package is an offline, rights-gated training/evaluation tool only and is excluded from the OCI context. Any future released artifact is consumed by the Svelte browser Worker and queried by the TypeScript API. Scanning, collection, API, authentication, and sync all run in TypeScript/Svelte.
 
