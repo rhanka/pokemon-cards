@@ -7,7 +7,16 @@ kubectl kustomize deploy/k8s/overlays/prod
 kubectl apply --server-side --dry-run=server -k deploy/k8s/overlays/prod
 ```
 
-Production uses one replica and `Recreate` because the first tier uses SQLite
+Public routing for `pokemon.sent-tech.ca` is owned by the platform in `poc-k8s`.
+Its Ingress and `pokemon-cards-tls` certificate live in the `keda` namespace;
+the Ingress routes through `keda-add-ons-http-interceptor-proxy` to wake the
+application on HTTP traffic. The platform also owns the `HTTPScaledObject`
+(minimum 0, maximum 1, scale-down after 300 seconds) and the
+`allow-keda-interceptor` NetworkPolicy in
+`tenants/pokemon-cards/40-scale-to-zero.yaml`. A cold wake takes about 20 seconds.
+Do not add a tenant Ingress for this host: it would conflict with platform routing.
+
+Production scales between zero and one replica and uses `Recreate` because the first tier uses SQLite
 on a 4 GiB ReadWriteOnce PVC. The base manifest uses the portable
 `block-standard` class; on OVH BHS5 it maps to Cinder Block Storage. The
 `scaleway` overlay retains `sbs-default` only for source-cluster rollback or a
