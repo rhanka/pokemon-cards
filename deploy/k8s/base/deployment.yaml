@@ -6,7 +6,9 @@ metadata:
     app.kubernetes.io/name: pokemon-cards
     app.kubernetes.io/component: web
 spec:
-  replicas: 1
+  # No replicas field. The platform HTTPScaledObject in the keda namespace owns
+  # this Deployment's replica count and scales it between 0 and 1. Declaring it
+  # here would make every CD apply reset the count to 1 and fight scale-to-zero.
   revisionHistoryLimit: 2
   strategy:
     type: Recreate
