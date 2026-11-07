@@ -7,9 +7,28 @@ export default defineConfig({
     conditions: ["browser"],
   },
   test: {
-    environment: "jsdom",
     globals: true,
-    include: ["tests/**/*.test.ts"],
     setupFiles: ["./tests/setup.ts"],
+    // Vitest 4 bundles jsdom test files for the client environment, which
+    // rejects Node built-ins such as `node:sqlite`; server tests run in Node.
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "server",
+          environment: "node",
+          include: ["tests/server/**/*.test.ts"],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "client",
+          environment: "jsdom",
+          include: ["tests/**/*.test.ts"],
+          exclude: ["tests/server/**"],
+        },
+      },
+    ],
   },
 });
