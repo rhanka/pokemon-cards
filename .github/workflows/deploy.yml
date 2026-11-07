@@ -121,7 +121,10 @@ jobs:
           fi
 
       - name: Server-side dry-run
-        run: kubectl apply --server-side --dry-run=server -f "$RENDERED_MANIFEST" -o name
+        # Server-side apply with a dedicated field manager: the rendered manifest
+        # is the source of truth and takes ownership of fields previously set by
+        # a manual `kubectl set image`. Replicas are absent, so KEDA keeps them.
+        run: kubectl apply --server-side --force-conflicts --field-manager=pokemon-cards-ci --dry-run=server -f "$RENDERED_MANIFEST" -o name
       - name: Expand the existing PVC in place
         run: |
           kubectl -n pokemon-cards patch pvc pokemon-cards-data --type=merge \
@@ -143,7 +146,7 @@ jobs:
           fi
       - name: Apply and wait
         run: |
-          kubectl apply -f "$RENDERED_MANIFEST"
+          kubectl apply --server-side --force-conflicts --field-manager=pokemon-cards-ci -f "$RENDERED_MANIFEST"
           kubectl -n pokemon-cards rollout status deployment/pokemon-cards --timeout=180s
           for attempt in $(seq 1 36); do
             CAPACITY="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.status.capacity.storage}')"
