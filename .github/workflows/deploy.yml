@@ -101,7 +101,7 @@ jobs:
           # namespaced PVC annotation proves Cinder provisioned its storage.
           test "$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')" = "https://hlhedx.c1.bhs5.k8s.ovh.net"
           EXISTING_PVC_CLASS="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.spec.storageClassName}')"
-          EXISTING_PVC_PROVISIONER="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.metadata.annotations.volume\\.kubernetes\\.io/storage-provisioner}')"
+          EXISTING_PVC_PROVISIONER="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.metadata.annotations.volume\.kubernetes\.io/storage-provisioner}')"
           EXISTING_PVC_PHASE="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.status.phase}')"
           EXISTING_PVC_CAPACITY="$(kubectl -n pokemon-cards get pvc pokemon-cards-data -o jsonpath='{.status.capacity.storage}')"
           test "$EXISTING_PVC_CLASS" = "block-standard"
