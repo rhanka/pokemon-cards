@@ -12,7 +12,12 @@
     "skipLibCheck": true,
     "strict": true,
     "target": "ES2022",
-    "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom"]
+    "types": [
+      "node",
+      "vite/client",
+      "vitest/globals",
+      "@testing-library/jest-dom"
+    ]
   },
   "include": [
     "src/**/*.d.ts",
